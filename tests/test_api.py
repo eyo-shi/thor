@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from typing import Iterator
+from unittest import mock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -49,6 +50,7 @@ def test_openapi_paths_exposed(client: TestClient) -> None:
         "/api/catalog/tables",
         "/api/catalog/columns",
         "/api/files/list",
+        "/api/files/preview",
         "/api/query",
         "/api/ossie/{fq}",
         "/api/artifacts/{artifact_id}",
@@ -69,6 +71,12 @@ def test_catalog_requires_knox_jwt(client: TestClient) -> None:
 
 def test_files_requires_knox_jwt(client: TestClient) -> None:
     r = client.get("/api/files/list?bucket=x")
+    assert r.status_code == 401
+    assert r.json()["detail"]["error_code"] == "AUTH_MISSING"
+
+
+def test_files_preview_requires_knox_jwt(client: TestClient) -> None:
+    r = client.get("/api/files/preview?bucket=x&key=a.csv")
     assert r.status_code == 401
     assert r.json()["detail"]["error_code"] == "AUTH_MISSING"
 
@@ -261,3 +269,134 @@ def test_wish_session_id_via_header(client: TestClient) -> None:
     r2 = client.get("/api/sessions/sess_hdr_1")
     assert r2.status_code == 200
     assert len(r2.json()["turns"]) == 1
+
+
+# ------------------------------------------------------------------ #
+# /api/files/preview (S3 client をモック)
+# ------------------------------------------------------------------ #
+def _fake_s3_body(payload: bytes) -> object:
+    """boto3 の GetObject のような Body.read() を持つオブジェクトを返す。"""
+    stream = mock.MagicMock()
+    stream.read.return_value = payload
+    return stream
+
+
+def _fake_get_object(payload: bytes, *, content_type: str = "text/plain"):
+    """Range/GetObject 共通の擬似レスポンス生成関数。"""
+
+    def _impl(*, Bucket: str, Key: str, Range: str | None = None, **_: object) -> dict:
+        return {
+            "Body": _fake_s3_body(payload),
+            "ContentType": content_type,
+            "ContentLength": len(payload),
+            "ContentRange": f"bytes 0-{len(payload) - 1}/{len(payload)}",
+        }
+
+    return _impl
+
+
+def test_files_preview_csv_success(client: TestClient) -> None:
+    """CSV: Sniffer が delimiter/encoding/header を返し、rows がトリムされる。"""
+    csv_bytes = b"name,age,city\nalice,30,tokyo\nbob,25,osaka\ncarol,40,kyoto\n"
+    fake_client = mock.MagicMock()
+    fake_client.get_object.side_effect = _fake_get_object(
+        csv_bytes, content_type="text/csv"
+    )
+    with mock.patch(
+        "thor.api.routes.files.s3_client_for_user", return_value=fake_client
+    ):
+        r = client.get(
+            "/api/files/preview?bucket=demo&key=data.csv&rows=2",
+            headers={"Authorization": "Bearer fake.jwt.token"},
+        )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["format"] == "csv"
+    assert body["delimiter"] == ","
+    assert body["has_header"] is True
+    assert body["header"] == ["name", "age", "city"]
+    assert body["row_count"] == 2  # rows=2 でトリム
+    assert body["rows"][0] == ["alice", "30", "tokyo"]
+
+
+def test_files_preview_json_success(client: TestClient) -> None:
+    """JSON: 単一 JSON 値としてパースされ、value に載る。"""
+    json_bytes = b'{"users": [{"name": "alice"}, {"name": "bob"}]}'
+    fake_client = mock.MagicMock()
+    fake_client.get_object.side_effect = _fake_get_object(
+        json_bytes, content_type="application/json"
+    )
+    with mock.patch(
+        "thor.api.routes.files.s3_client_for_user", return_value=fake_client
+    ):
+        r = client.get(
+            "/api/files/preview?bucket=demo&key=data.json",
+            headers={"Authorization": "Bearer fake.jwt.token"},
+        )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["format"] == "json"
+    assert body["mode"] == "json"
+    assert body["value"]["users"][0]["name"] == "alice"
+
+
+def test_files_preview_jsonl_success(client: TestClient) -> None:
+    """JSONL: 行単位で JSON をパースし、rows に載る。"""
+    jsonl_bytes = b'{"n":1}\n{"n":2}\n{"n":3}\n'
+    fake_client = mock.MagicMock()
+    fake_client.get_object.side_effect = _fake_get_object(
+        jsonl_bytes, content_type="application/x-ndjson"
+    )
+    with mock.patch(
+        "thor.api.routes.files.s3_client_for_user", return_value=fake_client
+    ):
+        r = client.get(
+            "/api/files/preview?bucket=demo&key=data.jsonl&rows=2",
+            headers={"Authorization": "Bearer fake.jwt.token"},
+        )
+    assert r.status_code == 200
+    body = r.json()
+    # magic byte は "json" を返す (leading char {) が、単発 JSON パースには失敗して JSONL に落ちる
+    assert body["format"] == "json"
+    assert body["mode"] == "jsonl"
+    assert body["row_count"] == 2
+    assert body["rows"] == [{"n": 1}, {"n": 2}]
+
+
+def test_files_preview_unsupported_format(client: TestClient) -> None:
+    """PNG のような未対応形式は format + note を返す (200)。"""
+    png_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
+    fake_client = mock.MagicMock()
+    fake_client.get_object.side_effect = _fake_get_object(
+        png_bytes, content_type="image/png"
+    )
+    with mock.patch(
+        "thor.api.routes.files.s3_client_for_user", return_value=fake_client
+    ):
+        r = client.get(
+            "/api/files/preview?bucket=demo&key=logo.png",
+            headers={"Authorization": "Bearer fake.jwt.token"},
+        )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["format"] == "png"
+    assert "note" in body
+
+
+def test_files_preview_s3_not_found(client: TestClient) -> None:
+    """S3 NoSuchKey は 502 + S3_NOT_FOUND で返る。"""
+    from thor.tools._s3_client import ClientError
+
+    fake_client = mock.MagicMock()
+    fake_client.get_object.side_effect = ClientError(
+        {"Error": {"Code": "NoSuchKey", "Message": "not found"}}, "GetObject"
+    )
+    with mock.patch(
+        "thor.api.routes.files.s3_client_for_user", return_value=fake_client
+    ):
+        r = client.get(
+            "/api/files/preview?bucket=demo&key=missing.csv",
+            headers={"Authorization": "Bearer fake.jwt.token"},
+        )
+    assert r.status_code == 502
+    assert r.json()["detail"]["error_code"] == "S3_NOT_FOUND"
