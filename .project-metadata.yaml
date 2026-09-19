@@ -1,0 +1,179 @@
+name: Thor
+description: |
+  Cloudera AI Agent Studio 上で動作する Databricks Genie 相当のマルチエージェント。
+  自然言語で S3 → Iceberg 取り込み / Data サマリー生成 / Cloudera Data Visualization
+  ダッシュボード作成を一気通貫に行う。3 ペイン Web UI (React + Vite) と FastAPI
+  バックエンドを Cloudera AI Workbench Application として配信し、Trino / CDV /
+  S3 は Knox JWT + IDBroker によるエンドユーザー権限で操作する (Genie 相当の RBAC)。
+  セマンティックレイヤは Apache Ossie の YAML を Git 管理する。
+
+author: Cloudera
+date: "2026-09-19"
+specification_version: 1.0
+prototype_version: 0.0.1
+
+# ---------------------------------------------------------------------------
+# Runtime (Python 3.11)
+# ---------------------------------------------------------------------------
+runtimes:
+  - editor: PBJ Workbench
+    kernel: Python 3.11
+    edition: Standard
+
+# ---------------------------------------------------------------------------
+# ユーザー入力 (AMP セットアップ画面のフォームに現れる)
+# ---------------------------------------------------------------------------
+environment_variables:
+  # --- Cloudera AI Inference (LLM) ---
+  CAI_INFERENCE_BASE_URL:
+    default: ""
+    description: >-
+      Cloudera AI Inference の base URL。例: https://ml-xxxx.cloudera.site/namespaces/serving-default/endpoints
+    required: true
+  CAI_INFERENCE_API_KEY:
+    default: ""
+    description: Cloudera AI Inference API key (Workbench の Secret に保存推奨)
+    required: true
+  THOR_LLM_ROUTER_MODEL:
+    default: "llama-3-8b-instruct"
+    description: Router / S3 Scout / Format Sniffer / Ossie Drafter 用の軽量モデル ID
+    required: true
+  THOR_LLM_ANALYTICS_MODEL:
+    default: "llama-3-70b-instruct"
+    description: Schema Drafter / Text2SQL / Analytics 用の精度重視モデル ID
+    required: true
+  THOR_LLM_EMBEDDING_MODEL:
+    default: "bge-m3"
+    description: Ossie RAG 検索の embedding モデル ID
+    required: false
+
+  # --- Trino / Cloudera Data Warehouse ---
+  TRINO_HOST:
+    default: ""
+    description: Trino エンドポイント (Knox 経由の hostname)。例 coord-cdw.example.com
+    required: true
+  TRINO_PORT:
+    default: "443"
+    description: Trino ポート
+    required: false
+  TRINO_CATALOG:
+    default: "iceberg"
+    description: 既定 catalog (通常は iceberg)
+    required: false
+  TRINO_SCHEMA:
+    default: "demo"
+    description: 既定 schema (デモ用スキーマ名)
+    required: false
+
+  # --- Cloudera Data Visualization ---
+  CDV_BASE_URL:
+    default: ""
+    description: CDV の base URL。ダッシュボード API と iframe 埋め込みの両方に使用
+    required: true
+
+  # --- S3 / IDBroker ---
+  IDBROKER_URL:
+    default: ""
+    description: IDBroker mapping エンドポイント。ユーザー個別 STS 資格情報の払い出し用
+    required: true
+  S3_DEMO_BUCKET:
+    default: ""
+    description: デモ用 S3 バケット名 (取り込みサンプルの置き場)
+    required: false
+
+  # --- Knox / Auth ---
+  KNOX_GATEWAY_URL:
+    default: ""
+    description: Knox Gateway URL。JWT の署名検証と Trino/CDV へのパススルーに使用
+    required: true
+
+  # --- Thor 本体 ---
+  THOR_LOG_LEVEL:
+    default: "INFO"
+    description: structlog のログレベル (DEBUG / INFO / WARNING / ERROR)
+    required: false
+  THOR_DEMO_MODE:
+    default: "off"
+    description: >-
+      "warm" にすると Tool の重い呼び出しをウォーミング済みのスタブに差し替える (デモ保険)。
+      本番は "off"。
+    required: false
+
+# ---------------------------------------------------------------------------
+# Feature dependencies (Workbench 側の必須機能)
+# ---------------------------------------------------------------------------
+feature_dependencies:
+  - model_deployment
+
+# ---------------------------------------------------------------------------
+# セットアップ手順 (上から順に実行される)
+# ---------------------------------------------------------------------------
+tasks:
+  # 1. Python 依存を editable install する。crewai / boto3 / trino / pyarrow …
+  - type: run_session
+    name: Install Python dependencies
+    script: amp/01_install_python_deps.py
+    short_summary: pip install -e . で thor パッケージと依存を導入
+    long_summary: >-
+      pyproject.toml の dependencies を editable install する。 crewai>=0.70,
+      boto3, trino, pyarrow, pandas, openpyxl, GitPython, structlog, FastAPI,
+      Pydantic v2, PyJWT[crypto] を含む。追加で dev extras (pytest) も入れる。
+    kernel: python3
+    cpu: 2
+    memory: 4
+
+  # 2. React + Vite で thor_ui をビルド → thor/api/static/ に成果物を出す
+  - type: run_session
+    name: Build Thor UI (React + Vite)
+    script: amp/02_build_ui.py
+    short_summary: npm ci && npm run build で 3 ペイン UI をビルド
+    long_summary: >-
+      thor_ui/ (React + TypeScript + Vite) の依存をインストールし、本番ビルドを
+      thor/api/static/ に出す。FastAPI が SPA として / から配信する。
+    kernel: python3
+    cpu: 2
+    memory: 4
+
+  # 3. semantic/ (Ossie YAML) の Git 初期化。既存の repo に clone 済みなら no-op
+  - type: run_session
+    name: Prepare semantic (Ossie) Git repo
+    script: amp/03_seed_semantic.py
+    short_summary: semantic/ を Git 管理下に置き、Ossie 用ディレクトリを用意
+    long_summary: >-
+      semantic/{datasets,metrics,relationships,prompts,index} を作成し、
+      Ossie Drafter が draft を PR ベースで積めるようにする。既に .git があれば
+      スキップ。commit author は Workbench のユーザー ID を使う。
+    kernel: python3
+    cpu: 1
+    memory: 2
+
+  # 4. Agent Studio manifest の drift 検出 (CI ゲートを AMP 側でも走らせておく)
+  - type: run_session
+    name: Verify Agent Studio manifest is in sync
+    script: amp/04_verify_manifest.py
+    short_summary: python -m thor.manifest --check で Python ⇄ YAML drift を検出
+    long_summary: >-
+      agent_studio_manifest/ 配下の YAML が thor.tools / thor.ingestion.crew の
+      Python 定義と一致していることを確認する。ズレていたら AMP セットアップは
+      失敗する (Model C ハイブリッドの契約)。
+    kernel: python3
+    cpu: 1
+    memory: 2
+
+  # 5. Thor API を Workbench Application として起動 (Knox パススルーで公開)
+  - type: start_application
+    name: Thor API + UI
+    subdomain: thor
+    static_subdomain: true
+    script: thor/api/main.py
+    short_summary: FastAPI + SPA を Workbench Application として起動
+    long_summary: >-
+      thor.api.main:app を uvicorn で起動する。ポートは Workbench が割り当てる
+      CDSW_APP_PORT を使う。FastAPI が /api/* を提供しつつ / で SPA を静的配信
+      する。Knox JWT は X-Forwarded-User / Cookie から抽出し、Trino / CDV /
+      IDBroker へパススルーする。
+    kernel: python3
+    cpu: 2
+    memory: 4
+    environment_variables:
+      TASK_TYPE: START_APPLICATION
