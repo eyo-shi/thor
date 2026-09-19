@@ -156,11 +156,16 @@ def test_wish_unknown_asks_clarification(client: TestClient) -> None:
     assert done_evt["ok"] is True
 
 
-def test_wish_analytics_summary_not_implemented(client: TestClient) -> None:
-    """Router が ANALYZE_SUMMARY と判定した後、AnalyticsCrew 未実装で error を返す。
+def test_wish_analytics_summary_dispatches_to_summary_crew(
+    client: TestClient,
+) -> None:
+    """Router が ANALYZE_SUMMARY と判定した後、AnalyticsSummaryCrew に届く。
 
     entity_memory.last_table を事前に流し込んでおくことで、Router 側の
-    clarify を回避して AnalyticsCrew ディスパッチまで到達させる。
+    clarify を回避して AnalyticsSummaryCrew ディスパッチまで到達させる。
+    crewai / LLM は未接続なので Crew 起動時に HTTP_UNAVAILABLE または
+    それ相当の構造化エラーで返るが、いずれにせよ AnalyticsSummaryCrew の
+    running step が SSE に出て、NOT_IMPLEMENTED では **ない** ことを検証。
     """
     from thor.api.state import get_store
 
@@ -172,6 +177,36 @@ def test_wish_analytics_summary_not_implemented(client: TestClient) -> None:
     r = client.post(
         "/api/wish",
         json={"prompt": "そのテーブルをサマリーして", "session_id": sess.session_id},
+    )
+    assert r.status_code == 200
+    events = _parse_sse(r.text)
+    # AnalyticsSummaryCrew の running step が出ている
+    step_events = [p for k, p in events if k == "step"]
+    assert any(
+        p.get("agent") == "AnalyticsSummaryCrew" and p.get("status") == "running"
+        for p in step_events
+    )
+    # NOT_IMPLEMENTED では返らない (Summary パスは実装済み)
+    error_events = [p for k, p in events if k == "error"]
+    for e in error_events:
+        assert e.get("error_code") != "NOT_IMPLEMENTED"
+
+
+def test_wish_analytics_dashboard_still_not_implemented(client: TestClient) -> None:
+    """Dashboard パスは未実装なので NOT_IMPLEMENTED が返る。"""
+    from thor.api.state import get_store
+
+    store = get_store()
+    sess = store.get_or_create_session("sess_dashboard_1", "alice")
+    store.update_entity_memory(
+        sess.session_id, {"last_table": "iceberg.demo.sales_2024"}
+    )
+    r = client.post(
+        "/api/wish",
+        json={
+            "prompt": "そのテーブルからダッシュボードを作って",
+            "session_id": sess.session_id,
+        },
     )
     assert r.status_code == 200
     events = _parse_sse(r.text)

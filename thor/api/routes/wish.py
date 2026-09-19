@@ -25,6 +25,7 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
+from thor.analytics.crew import kickoff_analytics_summary
 from thor.api.auth import get_user_context
 from thor.api.sse import sse_artifact, sse_done, sse_error, sse_step, sse_token
 from thor.api.state import SessionTurn, get_store
@@ -108,13 +109,26 @@ async def post_wish(
                     error_holder=error_holder,
                 ):
                     yield chunk
-            elif plan.child_crew in ("analytics_summary", "analytics_dashboard"):
-                # AnalyticsCrew 未実装 (Router では intent は取れるが実行手段が無い)
+            elif plan.child_crew == "analytics_summary":
+                async for chunk in _handle_summary(
+                    request=request,
+                    user_ctx=user_ctx,
+                    session_id=session.session_id,
+                    turn_id=turn_id,
+                    fq_table_name=str(plan.inputs.get("fq_table_name", "")),
+                    question=str(plan.inputs.get("question") or body.prompt),
+                    artifacts_created=artifacts_created,
+                    response_md_parts=response_md_parts,
+                    error_holder=error_holder,
+                ):
+                    yield chunk
+            elif plan.child_crew == "analytics_dashboard":
+                # Dashboard パスはまだ未実装 (CDV Adapter + VizPlanner が必要)
                 error_holder[0] = "NOT_IMPLEMENTED"
                 yield sse_error(
                     "NOT_IMPLEMENTED",
-                    "AnalyticsCrew (サマリー / ダッシュボード) は未実装です。"
-                    "現時点では Ingestion のみ対応しています。",
+                    "AnalyticsCrew Dashboard パスは未実装です。"
+                    "現時点では Ingestion と Summary のみ対応しています。",
                 )
             else:
                 # child_crew='none' で skip_child=false は理論上ありえない
@@ -341,3 +355,150 @@ def _format_report_markdown(
         lines.append("")
         lines.append(extra)
     return "\n".join(lines) + "\n"
+
+
+# ------------------------------------------------------------------ #
+# Analytics Summary path
+# ------------------------------------------------------------------ #
+async def _handle_summary(
+    *,
+    request: Request,
+    user_ctx: UserContext,
+    session_id: str,
+    turn_id: str,
+    fq_table_name: str,
+    question: str,
+    artifacts_created: list[str],
+    response_md_parts: list[str],
+    error_holder: list[Optional[str]],
+) -> AsyncIterator[dict]:
+    """AnalyticsCrew (Summary) を走らせて SSE イベントを yield する。"""
+    if not fq_table_name or fq_table_name.count(".") != 2:
+        error_holder[0] = "ANALYTICS_MISSING_ARGS"
+        yield sse_error(
+            "ANALYTICS_MISSING_ARGS",
+            "サマリー対象のテーブル (catalog.schema.table) が特定できませんでした。",
+        )
+        return
+
+    yield sse_step(
+        "AnalyticsSummaryCrew",
+        "running",
+        f"{fq_table_name} を調査し、サマリーを作成します...",
+    )
+
+    # UserContext を持ち込む session_id つきの派生を用意
+    scoped_ctx = UserContext(
+        user_name=user_ctx.user_name,
+        groups=user_ctx.groups,
+        knox_jwt=user_ctx.knox_jwt,
+        aws_credentials=user_ctx.aws_credentials,
+        session_id=session_id,
+    )
+
+    # crew.kickoff は同期 & LLM 呼び出し込みで長い → to_thread で退避
+    def _run() -> dict:
+        token = set_user_context(scoped_ctx)
+        try:
+            return kickoff_analytics_summary(
+                user_ctx=scoped_ctx,
+                fq_table_name=fq_table_name,
+                question=question,
+            )
+        finally:
+            reset_user_context(token)
+
+    task = asyncio.create_task(asyncio.to_thread(_run))
+
+    # 実行中は 5 秒に 1 回進捗イベントを出しつつクライアント切断も監視する
+    while not task.done():
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=5.0)
+        except asyncio.TimeoutError:
+            if await request.is_disconnected():
+                task.cancel()
+                return
+            yield sse_step("AnalyticsSummaryCrew", "running", "Crew 実行中...")
+
+    result = await task
+    if result.get("status") != "ok":
+        code = result.get("error_code", "ANALYTICS_SUMMARY_FAILED")
+        msg = result.get("message", "AnalyticsSummary failed")
+        error_holder[0] = code
+        yield sse_error(code, msg)
+        return
+
+    report = (result.get("payload") or {}).get("report") or {}
+    md = _format_summary_markdown(report, fq_table_name)
+
+    # summary artifact を artifact ストアに登録 (ResultPane タブから開ける)
+    store = get_store()
+    art = store.register_artifact(
+        "summary",
+        ref={
+            "fq": fq_table_name,
+            "markdown": md,
+            "observations": report.get("observations") or [],
+            "warnings": report.get("warnings") or [],
+            "sample_queries": report.get("sample_queries") or [],
+        },
+        session_id=session_id,
+    )
+    artifacts_created.append(art.artifact_id)
+
+    # entity_memory を更新して次ターンの「そのサマリー」参照に備える
+    store.update_entity_memory(
+        session_id,
+        {
+            "last_table": fq_table_name,
+            "last_summary_artifact_id": art.artifact_id,
+        },
+    )
+
+    yield sse_artifact(art.artifact_id, "summary", ref={"fq": fq_table_name})
+    response_md_parts.append(md)
+    yield sse_token(md)
+    yield sse_step("AnalyticsSummaryCrew", "done", "サマリーを作成しました。")
+
+
+def _format_summary_markdown(report: dict, fq_table_name: str) -> str:
+    """SummaryReport を ChatPane に流す Markdown にする。
+
+    ``summary_markdown`` は LLM が書き切っている前提だが、空だった場合の
+    最低限フォールバックとして観察点だけでも並べる。
+    """
+    if not report:
+        return f"`{fq_table_name}` のサマリー生成を試みましたが、結果が取得できませんでした。\n"
+
+    md = str(report.get("summary_markdown") or "").strip()
+    if md:
+        # 先頭に見出しが無ければ付ける
+        if not md.startswith("#"):
+            md = f"## `{fq_table_name}` のサマリー\n\n{md}"
+        parts = [md]
+    else:
+        parts = [f"## `{fq_table_name}` のサマリー", ""]
+        for obs in report.get("observations") or []:
+            headline = obs.get("headline") or ""
+            if headline:
+                parts.append(f"- {headline}")
+
+    warnings = report.get("warnings") or []
+    if warnings:
+        parts.append("")
+        parts.append("**注意点**:")
+        for w in warnings:
+            parts.append(f"- {w}")
+
+    samples = report.get("sample_queries") or []
+    if samples:
+        parts.append("")
+        parts.append("**次に見ると良さそうな SQL**:")
+        for s in samples[:3]:
+            q = s.get("question") or ""
+            sql = s.get("sql") or ""
+            if q and sql:
+                parts.append(f"- {q}")
+                parts.append(f"  ```sql\n  {sql}\n  ```")
+
+    return "\n".join(parts).rstrip() + "\n"
