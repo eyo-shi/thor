@@ -1,0 +1,38 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# --- Node (thor_ui) ---
+thor_ui/node_modules/
+thor_ui/dist/
+thor_ui/.vite/
+thor_ui/*.log
+thor_ui/.eslintcache
+
+# Vite ビルド成果物の出力先 (成果物は Git 管理しない)
+thor/api/static/
+
+# --- Ossie index (キャッシュ、大きいので Git LFS or 除外) ---
+semantic/index/*.parquet
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

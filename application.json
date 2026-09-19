@@ -1,0 +1,17 @@
+{
+  "$schema-note": "Cloudera AI Workbench Application manifest (最小構成、後で拡張)",
+  "name": "Thor",
+  "description": "Cloudera AI Agent Studio 上の Genie 相当マルチエージェント + 3 ペイン UI",
+  "type": "APPLICATION",
+  "entry": "python -m thor.api.main",
+  "kernel": "python3",
+  "cpu": 2,
+  "memory": 4,
+  "nvidia_gpu": 0,
+  "environment": {
+    "THOR_LOG_LEVEL": "INFO",
+    "THOR_DEMO_MODE": "off"
+  },
+  "port_env_var": "CDSW_APP_PORT",
+  "static_subdomain": "thor"
+}
