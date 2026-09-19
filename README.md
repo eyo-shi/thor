@@ -1,10 +1,8 @@
 # Thor
 
-Cloudera AI Agent Studio 上で動作する Databricks Genie 相当のマルチエージェント。自然言語で **S3 → Iceberg 取り込み / サマリー生成 / Cloudera Data Visualization ダッシュボード作成** を一気通貫に行う。3 ペイン Web UI (React + Vite) + FastAPI バックエンドを Cloudera AI Workbench Application として配信する。
+Cloudera AI Agent Studio 上で動作する自然言語データ分析マルチエージェント。ユーザーが日本語 / 英語で問い合わせるだけで **S3 → Iceberg 取り込み / テーブルサマリー生成 / Cloudera Data Visualization ダッシュボード作成** を一気通貫に実行する。3 ペイン Web UI (React + Vite) + FastAPI バックエンドを Cloudera AI Workbench Application として配信する。
 
 セマンティックレイヤは **Apache Ossie**（YAML 仕様）を採用し、`semantic/` 配下で Git 管理する。
-
-> 詳細な設計は `/Users/eyoshida/.claude/plans/databricks-genie-s3-cloudera-ai-virtual-dream.md` を参照。
 
 ## 構成
 
