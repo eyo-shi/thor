@@ -54,6 +54,7 @@ dev = [
 
 [project.scripts]
 thor-api = "thor.api.main:main"
+thor-manifest = "thor.manifest.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["thor"]
