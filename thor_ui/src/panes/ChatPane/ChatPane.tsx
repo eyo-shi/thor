@@ -1,20 +1,25 @@
 /**
- * 右ペイン: エージェント対話 (SSE ストリームによるサブステップ表示)。
- * 実装は後続タスクで MessageList / StepIndicator / PromptInput / useWishStream に分割する。
+ * 右ペイン: エージェント対話。
+ * SSE で流れてくる step / token / artifact / error / done を Store に反映し、
+ * MessageList / StepIndicator が render する。
  */
+import { MessageList } from "./MessageList";
+import { PromptInput } from "./PromptInput";
+import { StepIndicator } from "./StepIndicator";
+import { useWishStream } from "./useWishStream";
+
 export function ChatPane() {
+  const wish = useWishStream();
   return (
     <div className="chat-pane">
       <div className="pane-header">
         <span>Chat</span>
       </div>
-      <div className="pane-body">
-        <p className="placeholder">Ask Thor…</p>
+      <div className="pane-body chat-body">
+        <MessageList />
+        <StepIndicator />
       </div>
-      <div className="pane-footer">
-        <textarea placeholder="prompt" disabled />
-        <button disabled>Send ▶</button>
-      </div>
+      <PromptInput wish={wish} />
     </div>
   );
 }
