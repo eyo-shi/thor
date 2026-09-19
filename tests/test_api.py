@@ -130,14 +130,53 @@ def _parse_sse(text: str) -> list[tuple[str, dict]]:
     return events
 
 
-def test_wish_without_s3_uri_returns_not_implemented(client: TestClient) -> None:
-    r = client.post("/api/wish", json={"prompt": "hello, no uri"})
+def test_wish_chitchat_returns_greeting_no_error(client: TestClient) -> None:
+    """Router が CHITCHAT と判定し、error なしで返答トークンを送る。"""
+    r = client.post("/api/wish", json={"prompt": "こんにちは"})
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("text/event-stream")
     events = _parse_sse(r.text)
     kinds = [k for k, _ in events]
-    assert "error" in kinds
+    assert "error" not in kinds
+    assert "token" in kinds
     assert "done" in kinds
+    done_evt = next(p for k, p in events if k == "done")
+    assert done_evt["ok"] is True
+
+
+def test_wish_unknown_asks_clarification(client: TestClient) -> None:
+    """Router が UNKNOWN と判定した場合 clarification を token で返す。"""
+    r = client.post("/api/wish", json={"prompt": "何か適当な要求"})
+    assert r.status_code == 200
+    events = _parse_sse(r.text)
+    kinds = [k for k, _ in events]
+    assert "error" not in kinds
+    assert "token" in kinds
+    done_evt = next(p for k, p in events if k == "done")
+    assert done_evt["ok"] is True
+
+
+def test_wish_analytics_summary_not_implemented(client: TestClient) -> None:
+    """Router が ANALYZE_SUMMARY と判定した後、AnalyticsCrew 未実装で error を返す。
+
+    entity_memory.last_table を事前に流し込んでおくことで、Router 側の
+    clarify を回避して AnalyticsCrew ディスパッチまで到達させる。
+    """
+    from thor.api.state import get_store
+
+    store = get_store()
+    sess = store.get_or_create_session("sess_analytics_1", "alice")
+    store.update_entity_memory(
+        sess.session_id, {"last_table": "iceberg.demo.sales_2024"}
+    )
+    r = client.post(
+        "/api/wish",
+        json={"prompt": "そのテーブルをサマリーして", "session_id": sess.session_id},
+    )
+    assert r.status_code == 200
+    events = _parse_sse(r.text)
+    kinds = [k for k, _ in events]
+    assert "error" in kinds
     err_evt = next(p for k, p in events if k == "error")
     assert err_evt["error_code"] == "NOT_IMPLEMENTED"
     done_evt = next(p for k, p in events if k == "done")
@@ -148,7 +187,7 @@ def test_wish_session_id_persisted(client: TestClient) -> None:
     """明示的 session_id (body) が保存され、履歴として読み戻せる。"""
     r = client.post(
         "/api/wish",
-        json={"prompt": "no uri", "session_id": "sess_test_abc"},
+        json={"prompt": "こんにちは", "session_id": "sess_test_abc"},
     )
     assert r.status_code == 200
 
@@ -157,7 +196,8 @@ def test_wish_session_id_persisted(client: TestClient) -> None:
     body = r2.json()
     assert body["session_id"] == "sess_test_abc"
     assert len(body["turns"]) == 1
-    assert body["turns"][0]["error_code"] == "NOT_IMPLEMENTED"
+    # CHITCHAT はエラーなしで完了する
+    assert body["turns"][0]["error_code"] is None
 
 
 def test_wish_session_id_via_header(client: TestClient) -> None:
@@ -165,7 +205,7 @@ def test_wish_session_id_via_header(client: TestClient) -> None:
     r = client.post(
         "/api/wish",
         headers={"X-Thor-Session-Id": "sess_hdr_1"},
-        json={"prompt": "no uri"},
+        json={"prompt": "こんにちは"},
     )
     assert r.status_code == 200
 

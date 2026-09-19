@@ -1,11 +1,13 @@
 """Wish (自然言語プロンプト) SSE エンドポイント (`POST /api/wish`)。
 
-ChatPane からのプロンプトを受け取り、Router → Crew の実行進捗を
-Server-Sent Events で逐次返す。Router / Analytics Crew が未実装のうちは
-以下のヒューリスティックで振り分ける:
+ChatPane からのプロンプトを :func:`kickoff_router` に渡し、判定された intent
+に応じて子 Crew (現時点では Ingestion のみ実装) を Python 側から起動する。
+実行進捗は Server-Sent Events で逐次返す。
 
-* プロンプト中に ``s3://<bucket>/<key>`` が現れる → Ingestion Crew に流す
-* それ以外 → 未実装エラーを ``event: error`` で返す
+Router モードは :func:`kickoff_router` の ``mode='auto'`` に任せる:
+
+  * ``THOR_ROUTER_MODE=llm`` かつ LLM が組み立てられる場合 -> LLM 経路
+  * それ以外 -> heuristic (s3 URI 正規表現 + 日本語キーワード)
 
 **注意**:
 * Knox JWT は :class:`UserContext` に載せて ContextVar にセットしてから
@@ -16,7 +18,6 @@ Server-Sent Events で逐次返す。Router / Analytics Crew が未実装のう�
 from __future__ import annotations
 
 import asyncio
-import re
 import uuid
 from typing import Annotated, AsyncIterator, Optional
 
@@ -28,6 +29,7 @@ from thor.api.auth import get_user_context
 from thor.api.sse import sse_artifact, sse_done, sse_error, sse_step, sse_token
 from thor.api.state import SessionTurn, get_store
 from thor.ingestion.crew import kickoff_ingestion
+from thor.router import DispatchPlan, RouterResult, kickoff_router
 from thor.transport.logging import get_logger
 from thor.transport.user_context import (
     UserContext,
@@ -38,13 +40,11 @@ from thor.transport.user_context import (
 router = APIRouter(prefix="/api", tags=["wish"])
 _logger = get_logger(__name__)
 
-_S3_URI_RE = re.compile(r"s3://([^/\s]+)/([^\s]+)")
-
 
 class WishRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=8192)
     session_id: Optional[str] = None
-    #: Ingestion 用: 未指定なら "demo"
+    #: Ingestion 用: 未指定なら Router 側で "demo"
     target_schema: Optional[str] = Field(None, max_length=128)
 
 
@@ -54,9 +54,8 @@ async def post_wish(
     request: Request,
     user_ctx: Annotated[UserContext, Depends(get_user_context)],
 ) -> EventSourceResponse:
-    """SSE で Crew 実行を逐次配信する。"""
+    """SSE で Router + 子 Crew の実行を逐次配信する。"""
     store = get_store()
-    # body.session_id が優先、次いで X-Thor-Session-Id ヘッダから拾う
     sid = body.session_id or user_ctx.session_id
     session = store.get_or_create_session(sid, user_ctx.user_name)
     turn_id = f"turn_{uuid.uuid4().hex[:10]}"
@@ -64,33 +63,67 @@ async def post_wish(
     async def stream() -> AsyncIterator[dict]:
         artifacts_created: list[str] = []
         response_md_parts: list[str] = []
-        # ネストされたコルーチンからエラーコードを伝えるための可変ホルダ
         error_holder: list[Optional[str]] = [None]
+
         try:
-            # 意図分類 (ヒューリスティック; RouterCrew 実装後に差し替え)
-            m = _S3_URI_RE.search(body.prompt)
-            if m:
+            # 1) Router — heuristic モードは同期でも十分速い
+            yield sse_step("RouterCrew", "running", "意図を分類しています...")
+            router_result = await asyncio.to_thread(
+                _run_router,
+                user_ctx=user_ctx,
+                prompt=body.prompt,
+                session_id=session.session_id,
+                entity_memory=dict(session.entity_memory),
+                target_schema_override=body.target_schema,
+            )
+            yield sse_step(
+                "RouterCrew",
+                "done",
+                f"intent={router_result.classification.intent}",
+            )
+
+            plan = router_result.plan
+
+            # 2) skip_child (CHITCHAT / clarify / UNKNOWN) は response_markdown を流す
+            if plan.skip_child:
+                md = router_result.response_markdown or plan.response_markdown or ""
+                if md:
+                    response_md_parts.append(md)
+                    yield sse_token(md)
+                # clarify / unknown はエラーではないので error_holder は None のまま
+                return
+
+            # 3) 子 Crew ディスパッチ
+            if plan.child_crew == "ingestion":
                 async for chunk in _handle_ingest(
                     request=request,
                     user_ctx=user_ctx,
                     session_id=session.session_id,
                     turn_id=turn_id,
-                    bucket=m.group(1),
-                    key=m.group(2),
-                    target_schema=body.target_schema or "demo",
+                    bucket=str(plan.inputs.get("bucket", "")),
+                    key=str(plan.inputs.get("key", "")),
+                    target_schema=str(plan.inputs.get("target_schema") or "demo"),
                     artifacts_created=artifacts_created,
                     response_md_parts=response_md_parts,
                     error_holder=error_holder,
                 ):
                     yield chunk
-            else:
-                # RouterCrew / AnalyticsCrew 未実装のフォールバック
+            elif plan.child_crew in ("analytics_summary", "analytics_dashboard"):
+                # AnalyticsCrew 未実装 (Router では intent は取れるが実行手段が無い)
                 error_holder[0] = "NOT_IMPLEMENTED"
                 yield sse_error(
                     "NOT_IMPLEMENTED",
-                    "Ingestion 以外のプロンプトは現在未対応です。"
-                    "s3://bucket/key を含めて取り込みを依頼してください。",
+                    "AnalyticsCrew (サマリー / ダッシュボード) は未実装です。"
+                    "現時点では Ingestion のみ対応しています。",
                 )
+            else:
+                # child_crew='none' で skip_child=false は理論上ありえない
+                error_holder[0] = "INTERNAL_ERROR"
+                yield sse_error(
+                    "INTERNAL_ERROR",
+                    f"Unexpected dispatch plan: child_crew={plan.child_crew}",
+                )
+
         except asyncio.CancelledError:
             _logger.info(
                 "wish.cancelled",
@@ -128,8 +161,55 @@ async def post_wish(
                 ok=(error_holder[0] is None),
             )
 
-    # 過負荷対策: SSE の keepalive を 15 秒間隔で送る
     return EventSourceResponse(stream(), ping=15)
+
+
+# ------------------------------------------------------------------ #
+# Router 実行 (asyncio.to_thread で退避)
+# ------------------------------------------------------------------ #
+def _run_router(
+    *,
+    user_ctx: UserContext,
+    prompt: str,
+    session_id: str,
+    entity_memory: dict,
+    target_schema_override: Optional[str],
+) -> RouterResult:
+    """Router を実行し、target_schema の明示指定を plan に反映する。"""
+    token = set_user_context(user_ctx)
+    try:
+        result = kickoff_router(
+            user_ctx=user_ctx,
+            prompt=prompt,
+            session_id=session_id,
+            entity_memory=entity_memory,
+            # llm_light は未接続 (LiteLLM の構築は API 起動時に別途注入)
+            llm_light=None,
+            mode="auto",
+        )
+    finally:
+        reset_user_context(token)
+
+    # body.target_schema が明示されていれば Router の判定を上書き
+    if (
+        target_schema_override
+        and result.plan.child_crew == "ingestion"
+        and not result.plan.skip_child
+    ):
+        new_inputs = dict(result.plan.inputs)
+        new_inputs["target_schema"] = target_schema_override
+        result = RouterResult(
+            classification=result.classification,
+            plan=DispatchPlan(
+                intent=result.plan.intent,
+                child_crew=result.plan.child_crew,
+                inputs=new_inputs,
+                response_markdown=result.plan.response_markdown,
+                skip_child=result.plan.skip_child,
+            ),
+            response_markdown=result.response_markdown,
+        )
+    return result
 
 
 # ------------------------------------------------------------------ #
@@ -149,6 +229,14 @@ async def _handle_ingest(
     error_holder: list[Optional[str]],
 ) -> AsyncIterator[dict]:
     """Ingestion Crew を走らせて SSE イベントを yield する。"""
+    if not bucket or not key:
+        error_holder[0] = "INGESTION_MISSING_ARGS"
+        yield sse_error(
+            "INGESTION_MISSING_ARGS",
+            "取り込み対象の S3 パス (bucket / key) が特定できませんでした。",
+        )
+        return
+
     yield sse_step(
         "IngestionCrew", "running", f"s3://{bucket}/{key} を取り込みます..."
     )

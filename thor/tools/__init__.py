@@ -1,4 +1,4 @@
-"""CrewAI Tool 実装群 (S3 / Trino / Iceberg / Format 判定 / Ossie / DataFrame)。
+"""CrewAI Tool 実装群 (S3 / Trino / Iceberg / Format 判定 / Ossie / DataFrame / Router)。
 
 公開 Tool は :class:`thor.transport.tool_base.BaseThorTool` を継承し、
 ``requires_auth=True`` のものは Knox JWT / STS 資格情報が必須。
@@ -13,7 +13,14 @@
   DataFrame:  :class:`DataFramePreviewTool`
   Ossie:      :class:`OssieReadTool`, :class:`OssieWriteTool`, :class:`OssieSearchTool`,
               :class:`SimilarTableSearchTool`
+  Router:     :class:`EntityMemoryReadTool`, :class:`IngestionKickoffTool`,
+              :class:`AnalyticsKickoffTool`
 """
+from thor.router.tools import (
+    AnalyticsKickoffTool,
+    EntityMemoryReadTool,
+    IngestionKickoffTool,
+)
 from thor.tools.dataframe import DataFramePreviewTool
 from thor.tools.excel import ExcelHeaderDetectTool
 from thor.tools.format import CSVSnifferTool, MagicByteTool, ParquetMetaTool
@@ -56,4 +63,8 @@ __all__ = [
     "OssieWriteTool",
     "OssieSearchTool",
     "SimilarTableSearchTool",
+    # router
+    "EntityMemoryReadTool",
+    "IngestionKickoffTool",
+    "AnalyticsKickoffTool",
 ]

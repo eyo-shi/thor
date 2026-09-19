@@ -159,14 +159,14 @@ def _crew_registry() -> list[dict[str, Any]]:
     空エントリを生成する (Studio 側にプレースホルダを残す運用)。
     """
     from thor.ingestion.crew import build_ingestion_crew
+    from thor.router.crew import build_router_crew
 
     return [
         {
             "name": "router",
-            "factory": None,
-            "implemented": False,
+            "factory": lambda: build_router_crew(memory=False),
+            "implemented": True,
             "process": "sequential",
-            "todo": "IntentClassifierAgent + DispatcherAgent を実装後、build_router_crew() を接続する。",
         },
         {
             "name": "ingestion",
