@@ -155,10 +155,12 @@ def build_tools_manifest() -> dict[str, Any]:
 def _crew_registry() -> list[dict[str, Any]]:
     """(crew_name, factory, implemented) のリストを返す。
 
-    Router / Ingestion / AnalyticsSummary は実装済み。AnalyticsDashboard は
-    CDV Adapter と VizPlanner の実装後に埋める。
+    Router / Ingestion / AnalyticsSummary / AnalyticsDashboard は実装済み。
     """
-    from thor.analytics.crew import build_analytics_summary_crew
+    from thor.analytics.crew import (
+        build_analytics_dashboard_crew,
+        build_analytics_summary_crew,
+    )
     from thor.ingestion.crew import build_ingestion_crew
     from thor.router.crew import build_router_crew
 
@@ -184,10 +186,9 @@ def _crew_registry() -> list[dict[str, Any]]:
         },
         {
             "name": "analytics_dashboard",
-            "factory": None,
-            "implemented": False,
+            "factory": lambda: build_analytics_dashboard_crew(memory=False),
+            "implemented": True,
             "process": "sequential",
-            "todo": "VizPlanner / CDVStartupCheck / DashboardBuilder を実装後接続する。",
         },
     ]
 

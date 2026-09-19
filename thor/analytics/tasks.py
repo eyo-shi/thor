@@ -1,17 +1,28 @@
-"""Analytics Crew の Task 定義 (Summary パス, Sequential 2 タスク)。
+"""Analytics Crew の Task 定義。
 
-タスク順序:
-
+**Summary パス** (Sequential 2 タスク):
   1. inspect_table_task    (TableInspector, guardrail 付き)
   2. write_summary_task    (SummaryWriter, LLM 主体)
 
-副作用なし。すべて max_retries=1 (LLM が JSON を壊した場合の 1 回リカバリ)。
+**Dashboard パス** (Sequential 4 タスク):
+  1. inspect_table_task    (TableInspector, guardrail 付き) — Summary と共通
+  2. plan_viz_task         (VizPlanner, LLM が VizHeuristic の結果を絞る)
+  3. ensure_cdv_running_task (DashboardBuilder, guardrail 付き — running=False で停止)
+  4. build_dashboard_task  (DashboardBuilder, max_retries=0 で副作用重複を防ぐ)
+
+副作用なしのタスクは max_retries=1、CDV に書き込むタスクは max_retries=0。
 """
 from __future__ import annotations
 
 from typing import Any, Optional
 
-from thor.analytics.models import SummaryReport, TableInspectionResult
+from thor.analytics.models import (
+    BuildDashboardResult,
+    CDVStartupResult,
+    SummaryReport,
+    TableInspectionResult,
+    VizPlan,
+)
 
 try:
     from crewai import Task  # type: ignore
@@ -144,8 +155,151 @@ def inspect_table_guardrail(
     return True, None
 
 
+# ------------------------------------------------------------------ #
+# Dashboard パス: 3. plan_viz_task
+# ------------------------------------------------------------------ #
+def make_plan_viz_task(agent: Any, context: list[Task]) -> Task:
+    """VizHeuristicTool の候補を LLM が絞り込んで VizPlan にするタスク。
+
+    副作用なし。VizHeuristic は決定論的なので、LLM の仕事は「候補の名前を
+    日本語化する」「意味の薄い Visual を落とす」「タイトルを付ける」の 3 つ。
+    """
+    return Task(
+        description=(
+            "前タスクの TableInspectionResult のカラム情報から、"
+            "以下の手順でダッシュボード構成 (VizPlan) を作れ: "
+            "(a) viz_heuristic に fq_table_name と columns "
+            "  (name / trino_type / role / distinct_count / null_ratio) を渡し、"
+            "  最大 6 個の Visual 候補を得る。"
+            "(b) ossie_read で fq_name={fq_table_name} を読み、"
+            "  存在すれば description / sample_queries を参照する。"
+            "(c) 候補のうち意味の薄いもの (低カーディナリティ dim × 別 dim など) "
+            "  を落として 3-5 個に絞り、各 Visual の name を日本語に整える "
+            "  (例: 'revenue の推移' → '月次売上の推移')。"
+            "(d) title は 'このテーブルは何のダッシュボードか' が伝わる短い日本語に。"
+            "破壊系のカラム操作は絶対に含めず、SELECT / 集計に限定する。"
+        ),
+        expected_output=(
+            "VizPlan の JSON。fq_table_name, title, visuals ("
+            "[{name, viz_type, x, y, aggregation, group_by, description}]) を含む。"
+            "visuals は最低 1 個。"
+        ),
+        agent=agent,
+        context=context,
+        output_json=VizPlan,
+        max_retries=1,
+    )
+
+
+# ------------------------------------------------------------------ #
+# Dashboard パス: 4. ensure_cdv_running_task
+# ------------------------------------------------------------------ #
+def make_ensure_cdv_running_task(agent: Any, context: list[Task]) -> Task:
+    """CDV 疎通確認。running=False なら guardrail で Crew を停止する。
+
+    副作用なし (GET のみ)。max_retries=1。
+    """
+    return Task(
+        description=(
+            "cdv_startup_check を 1 回だけ呼び、Cloudera Data Visualization が"
+            "起動しているか確認せよ。"
+            "返り値をそのまま CDVStartupResult として出力する:"
+            "  running=true なら次のタスク (build_dashboard) へ進める。"
+            "  running=false なら error_code=CDV_NOT_RUNNING と、ユーザーへの"
+            "  案内 (Workbench の Data メニューから CDV を初回起動して欲しい旨) を"
+            "  message に載せる。"
+            "起動していれば endpoint と version をそのまま埋める。"
+        ),
+        expected_output=(
+            "CDVStartupResult の JSON。running, endpoint, version, message, "
+            "error_code を含む。"
+        ),
+        agent=agent,
+        context=context,
+        output_json=CDVStartupResult,
+        max_retries=1,
+    )
+
+
+# ------------------------------------------------------------------ #
+# Dashboard パス: 5. build_dashboard_task
+# ------------------------------------------------------------------ #
+def make_build_dashboard_task(agent: Any, context: list[Task]) -> Task:
+    """CDV に Dataset / Visual / Dashboard を実際に作るタスク。
+
+    副作用があるため max_retries=0。個別 Visual が 1 個失敗しても
+    残った Visual で Dashboard を組んで notes に記録する。
+    """
+    return Task(
+        description=(
+            "VizPlan と TableInspectionResult を使い、Cloudera Data Visualization"
+            "に対して以下を順に実行せよ: "
+            "(a) cdv_dataset_create_or_get に fq_table_name を渡して"
+            "  Dataset を確保する (既存なら再利用)。dataset_id と "
+            "  dataset_reused (created の否定) を控えておく。"
+            "(b) VizPlan.visuals の各 visual について cdv_visual_create を呼び、"
+            "  visual_id を集める。"
+            "  - viz_type=line/bar: x と y は必須。"
+            "  - viz_type=kpi: y (measure) 必須、x は None。"
+            "  - viz_type=pie: x 必須、y は不要 (aggregation=count)。"
+            "  - viz_type=table: x/y ともに不要。"
+            "  1 個失敗しても他は続行、失敗内容は notes に列挙する。"
+            "(c) cdv_dashboard_create に title=VizPlan.title と "
+            "  visual_ids (成功分) を渡し、dashboard_id と dashboard_url を得る。"
+            "(d) 最終出力 BuildDashboardResult に "
+            "  fq_table_name / title / dashboard_id / dashboard_url / "
+            "  dataset_id / dataset_reused / visual_ids / notes を詰める。"
+            "同じダッシュボードを二重に作らないこと (このタスクは max_retries=0)。"
+        ),
+        expected_output=(
+            "BuildDashboardResult の JSON。fq_table_name, title, dashboard_id, "
+            "dashboard_url, dataset_id, dataset_reused, visual_ids, notes を含む。"
+        ),
+        agent=agent,
+        context=context,
+        output_json=BuildDashboardResult,
+        max_retries=0,
+    )
+
+
+# ------------------------------------------------------------------ #
+# Dashboard パス: guardrail
+# ------------------------------------------------------------------ #
+def ensure_cdv_running_guardrail(
+    output: Any,
+) -> tuple[bool, Optional[str]]:
+    """CDVStartupResult を検査し、running=False で Crew を停止する。
+
+    Crew.ai の guardrail 契約は ``(ok, feedback)``。ok=False で後段が走らない。
+    """
+    if isinstance(output, CDVStartupResult):
+        result = output
+    elif isinstance(output, dict):
+        try:
+            result = CDVStartupResult.model_validate(output)
+        except Exception:  # noqa: BLE001
+            return False, f"guardrail: could not parse CDVStartupResult: {output!r}"
+    else:
+        return False, (
+            f"guardrail: unexpected CDVStartupResult type: {type(output).__name__}"
+        )
+
+    if not result.running:
+        return False, (
+            f"CDV is not running at {result.endpoint or '(unknown)'}: "
+            f"{result.message or 'startup check failed'}. "
+            "Ask the user to start Cloudera Data Visualization from the "
+            "Workbench Data menu once."
+        )
+    return True, None
+
+
 __all__ = [
     "make_inspect_table_task",
     "make_write_summary_task",
+    "make_plan_viz_task",
+    "make_ensure_cdv_running_task",
+    "make_build_dashboard_task",
     "inspect_table_guardrail",
+    "ensure_cdv_running_guardrail",
 ]

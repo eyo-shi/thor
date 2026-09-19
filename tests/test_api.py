@@ -192,8 +192,18 @@ def test_wish_analytics_summary_dispatches_to_summary_crew(
         assert e.get("error_code") != "NOT_IMPLEMENTED"
 
 
-def test_wish_analytics_dashboard_still_not_implemented(client: TestClient) -> None:
-    """Dashboard パスは未実装なので NOT_IMPLEMENTED が返る。"""
+def test_wish_analytics_dashboard_dispatches_to_dashboard_crew(
+    client: TestClient,
+) -> None:
+    """Router が ANALYZE_DASHBOARD と判定した後、AnalyticsDashboardCrew に届く。
+
+    Summary と同じく entity_memory.last_table を仕込んで、AnalyticsDashboardCrew
+    のディスパッチまで到達させる。crewai / CDV / LLM は未接続なので Crew
+    起動時に HTTP_UNAVAILABLE (crewai 無し) または CDV_NOT_RUNNING
+    (crewai 有り + THOR_CDV_BASE_URL 未設定) 相当の構造化エラーで返るが、
+    いずれにせよ AnalyticsDashboardCrew の running step が SSE に出て、
+    NOT_IMPLEMENTED では **ない** ことを検証。
+    """
     from thor.api.state import get_store
 
     store = get_store()
@@ -210,12 +220,16 @@ def test_wish_analytics_dashboard_still_not_implemented(client: TestClient) -> N
     )
     assert r.status_code == 200
     events = _parse_sse(r.text)
-    kinds = [k for k, _ in events]
-    assert "error" in kinds
-    err_evt = next(p for k, p in events if k == "error")
-    assert err_evt["error_code"] == "NOT_IMPLEMENTED"
-    done_evt = next(p for k, p in events if k == "done")
-    assert done_evt["ok"] is False
+    # AnalyticsDashboardCrew の running step が出ている
+    step_events = [p for k, p in events if k == "step"]
+    assert any(
+        p.get("agent") == "AnalyticsDashboardCrew" and p.get("status") == "running"
+        for p in step_events
+    )
+    # NOT_IMPLEMENTED では返らない (Dashboard パスは実装済み)
+    error_events = [p for k, p in events if k == "error"]
+    for e in error_events:
+        assert e.get("error_code") != "NOT_IMPLEMENTED"
 
 
 def test_wish_session_id_persisted(client: TestClient) -> None:

@@ -125,28 +125,78 @@ class SummaryReport(BaseModel):
 
 
 # ------------------------------------------------------------------ #
-# Dashboard パス: 未実装のプレースホルダ
+# Dashboard パス: 3 タスクの出力スキーマ
 # ------------------------------------------------------------------ #
+class VizProposal(BaseModel):
+    """VizPlan 内の 1 個の Visual 定義。
+
+    VizHeuristicTool が機械的に組んだ後、VizPlannerAgent (LLM) が名前を
+    日本語化したり不要な Visual を落としたりしてから最終確定させる。
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    name: str = Field(..., description="ユーザーに見せる Visual 名 (日本語 OK)")
+    viz_type: str = Field(..., description="line | bar | pie | kpi | table")
+    x: Optional[str] = Field(None, description="X 軸カラム (line/bar/pie/table で使用)")
+    y: Optional[str] = Field(None, description="Y 軸カラム / measure (line/bar/kpi で必須)")
+    aggregation: str = Field(
+        "sum", description="sum | avg | count | min | max"
+    )
+    group_by: Optional[str] = Field(
+        None, description="第 2 分岐カラム (色分けなどに使う)"
+    )
+    description: Optional[str] = Field(
+        None, description="この Visual の意図を 1 行で"
+    )
+
+
 class VizPlan(BaseModel):
-    """(未実装) VizPlanner の出力予定スキーマ。"""
+    """VizPlanner の出力。Dashboard で並べる Visual の設計図。"""
+
+    model_config = ConfigDict(extra="ignore")
 
     fq_table_name: str
-    visuals: list[dict[str, Any]] = Field(default_factory=list)
+    title: str = Field(..., description="ダッシュボード全体のタイトル")
+    visuals: list[VizProposal] = Field(default_factory=list, min_length=1)
 
 
 class CDVStartupResult(BaseModel):
-    """(未実装) CDV 起動確認。"""
+    """CDV 疎通確認の結果。
+
+    ``running=False`` は Dashboard Crew の guardrail が Crew を停止させる材料。
+    ユーザーへの案内 (Workbench Data メニューから CDV を初回起動) は
+    ``message`` に載せる。
+    """
+
+    model_config = ConfigDict(extra="ignore")
 
     running: bool
     endpoint: Optional[str] = None
+    version: Optional[str] = None
+    message: Optional[str] = None
+    error_code: Optional[str] = None
 
 
 class BuildDashboardResult(BaseModel):
-    """(未実装) 最終ダッシュボード。"""
+    """最終ダッシュボード。UI (ResultPane) が dashboard_url を iframe で開く。"""
 
-    dashboard_id: str
-    dashboard_url: str
+    model_config = ConfigDict(extra="ignore")
+
     fq_table_name: str
+    title: str
+    dashboard_id: str
+    dashboard_url: str = Field(
+        ..., description="iframe 埋め込み可能な CDV URL (Knox セッション継承)"
+    )
+    dataset_id: str
+    dataset_reused: bool = Field(
+        False, description="既存 Dataset を再利用したか (True) 新規作成か (False)"
+    )
+    visual_ids: list[str] = Field(default_factory=list, min_length=1)
+    notes: Optional[str] = Field(
+        None, description="ユーザーへの補足 (置換対象カラムが無かった等)"
+    )
 
 
 __all__ = [
@@ -156,7 +206,8 @@ __all__ = [
     # Summary
     "SummaryObservation",
     "SummaryReport",
-    # Dashboard (未実装)
+    # Dashboard
+    "VizProposal",
     "VizPlan",
     "CDVStartupResult",
     "BuildDashboardResult",

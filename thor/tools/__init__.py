@@ -1,4 +1,5 @@
-"""CrewAI Tool 実装群 (S3 / Trino / Iceberg / Format 判定 / Ossie / DataFrame / Router)。
+"""CrewAI Tool 実装群 (S3 / Trino / Iceberg / Format 判定 / Ossie / DataFrame /
+Router / CDV / Viz)。
 
 公開 Tool は :class:`thor.transport.tool_base.BaseThorTool` を継承し、
 ``requires_auth=True`` のものは Knox JWT / STS 資格情報が必須。
@@ -15,11 +16,20 @@
               :class:`SimilarTableSearchTool`
   Router:     :class:`EntityMemoryReadTool`, :class:`IngestionKickoffTool`,
               :class:`AnalyticsKickoffTool`
+  CDV:        :class:`CDVStartupCheckTool`, :class:`CDVDatasetTool`,
+              :class:`CDVVisualTool`, :class:`CDVDashboardTool`
+  Viz:        :class:`VizHeuristicTool`
 """
 from thor.router.tools import (
     AnalyticsKickoffTool,
     EntityMemoryReadTool,
     IngestionKickoffTool,
+)
+from thor.tools.cdv import (
+    CDVDashboardTool,
+    CDVDatasetTool,
+    CDVStartupCheckTool,
+    CDVVisualTool,
 )
 from thor.tools.dataframe import DataFramePreviewTool
 from thor.tools.excel import ExcelHeaderDetectTool
@@ -34,6 +44,7 @@ from thor.tools.ossie import (
 from thor.tools.s3 import S3GetRangeTool, S3HeadTool, S3ListTool
 from thor.tools.schema import NameProposerTool, TypeInferTool
 from thor.tools.trino import TrinoDDLTool, TrinoMetaTool, TrinoQueryTool
+from thor.tools.viz import VizHeuristicTool
 
 __all__ = [
     # s3
@@ -67,4 +78,11 @@ __all__ = [
     "EntityMemoryReadTool",
     "IngestionKickoffTool",
     "AnalyticsKickoffTool",
+    # cdv
+    "CDVStartupCheckTool",
+    "CDVDatasetTool",
+    "CDVVisualTool",
+    "CDVDashboardTool",
+    # viz
+    "VizHeuristicTool",
 ]

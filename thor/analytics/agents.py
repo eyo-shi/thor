@@ -1,21 +1,34 @@
 """Analytics Crew の Agent 定義。
 
-プラン準拠の役割分担 (Summary パスで使う 2 Agent のみ実装、Dashboard の
-3 Agent は追って実装):
+プラン準拠の役割分担:
 
-  TableInspectorAgent  -> TrinoQueryTool, TrinoMetaTool, OssieReadTool
-  SummaryWriterAgent   -> OssieReadTool  (LLM 主体)
+  Summary パス:
+    TableInspectorAgent  -> TrinoQueryTool, TrinoMetaTool, OssieReadTool
+    SummaryWriterAgent   -> OssieReadTool  (LLM 主体)
 
-Text2SQL / VizPlanner / DashboardBuilder は Dashboard パスで追加する。
+  Dashboard パス:
+    TableInspectorAgent  (Summary と共通)
+    VizPlannerAgent      -> VizHeuristicTool, OssieReadTool
+    DashboardBuilderAgent -> CDVStartupCheckTool, CDVDatasetTool,
+                             CDVVisualTool, CDVDashboardTool
+
+Text2SQL は現状 SummaryWriter / VizPlanner のプロンプト内で完結するので
+独立 Agent としては置かない (プランでは分離していたが、実運用の 4 タスク
+Sequential では過剰なホップになるため 3 タスクに集約)。
 """
 from __future__ import annotations
 
 from typing import Any, Optional
 
 from thor.tools import (
+    CDVDashboardTool,
+    CDVDatasetTool,
+    CDVStartupCheckTool,
+    CDVVisualTool,
     OssieReadTool,
     TrinoMetaTool,
     TrinoQueryTool,
+    VizHeuristicTool,
 )
 
 try:  # crewai は本番依存。無い環境でも import は通す
@@ -101,7 +114,89 @@ def make_summary_writer_agent(llm: Optional[Any] = None) -> Agent:
     )
 
 
+# ------------------------------------------------------------------ #
+# VizPlannerAgent (Dashboard パス)
+# ------------------------------------------------------------------ #
+def make_viz_planner_agent(llm: Optional[Any] = None) -> Agent:
+    """テーブルからダッシュボード構成 (VizPlan) を提案する Agent。
+
+    * まず :class:`VizHeuristicTool` を呼んで機械的な候補を得る
+      (時系列 line / カテゴリ bar / KPI など)。
+    * その後 LLM が候補の名前を日本語化 (「revenue の推移」→「月次売上の推移」)
+      し、意味の薄い Visual を落として最大 4-5 個に絞る。
+    * Ossie に ``sample_queries`` があれば、その意図に沿うように優先順位を調整。
+    """
+    return Agent(
+        role="Viz Planner",
+        goal=(
+            "TableInspectionResult のカラム情報から、ダッシュボードで見せる "
+            "Visual の集合 (VizPlan) を提案する。まず viz_heuristic を呼んで "
+            "候補を得て、その後 Ossie の description と sample_queries を "
+            "踏まえて Visual 名を日本語化し、意味の薄いものを落として 3-5 個に絞る。"
+            "破壊系のカラム操作は行わない (SELECT / 集計のみ)。"
+        ),
+        backstory=(
+            "BI 経験の長いアナリスト。まず 'これがあれば一目で分かる' Visual を"
+            "選び、無闇に増やさない。KPI・時系列・カテゴリ分解の 3 パターンで "
+            "たいていのニーズは満たせると信じている。"
+        ),
+        tools=[VizHeuristicTool(), OssieReadTool()],
+        llm=llm,
+        allow_delegation=False,
+        verbose=False,
+        memory=False,
+    )
+
+
+# ------------------------------------------------------------------ #
+# DashboardBuilderAgent (Dashboard パス)
+# ------------------------------------------------------------------ #
+def make_dashboard_builder_agent(llm: Optional[Any] = None) -> Agent:
+    """CDV に対して Dataset / Visual / Dashboard を実際に作る Agent。
+
+    副作用のある API を叩くため、Task 側では ``max_retries=0`` を必須にする
+    (Crew.ai の再試行で同じ Dashboard が 2 個作られるのを防ぐ)。
+    """
+    return Agent(
+        role="Dashboard Builder",
+        goal=(
+            "VizPlan と TableInspectionResult を受け取り、Cloudera Data "
+            "Visualization に対して以下を順に実行する: "
+            "  (1) cdv_startup_check で CDV が起動しているか確認、"
+            "      running=false なら CDV_NOT_RUNNING エラーで停止。"
+            "  (2) cdv_dataset_create_or_get で fq_table_name の Dataset を"
+            "      作成 or 既存を再利用。"
+            "  (3) VizPlan の各 visual について cdv_visual_create を呼び、"
+            "      visual_id を集める。失敗した Visual はスキップし、成功分だけで"
+            "      Dashboard を組む。"
+            "  (4) cdv_dashboard_create で全 visual_id を 1 つのダッシュボードに"
+            "      集約。title は VizPlan.title を使う。"
+            "  (5) 最終出力 BuildDashboardResult に dashboard_id / dashboard_url / "
+            "      dataset_id / visual_ids を詰める。"
+        ),
+        backstory=(
+            "Cloudera Data Visualization の管理経験があるエンジニア。"
+            "CDV は Dataset 名 + Connection ID で一意なので、既存があれば必ず"
+            "再利用する (毎回作ると管理画面が Dataset で溢れる)。"
+            "Visual 作成で 1 個失敗しても Dashboard は残りで組み、"
+            "notes フィールドに 'Visual X はスキップ' と書き残す。"
+        ),
+        tools=[
+            CDVStartupCheckTool(),
+            CDVDatasetTool(),
+            CDVVisualTool(),
+            CDVDashboardTool(),
+        ],
+        llm=llm,
+        allow_delegation=False,
+        verbose=False,
+        memory=False,
+    )
+
+
 __all__ = [
     "make_table_inspector_agent",
     "make_summary_writer_agent",
+    "make_viz_planner_agent",
+    "make_dashboard_builder_agent",
 ]

@@ -25,7 +25,10 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
-from thor.analytics.crew import kickoff_analytics_summary
+from thor.analytics.crew import (
+    kickoff_analytics_dashboard,
+    kickoff_analytics_summary,
+)
 from thor.api.auth import get_user_context
 from thor.api.sse import sse_artifact, sse_done, sse_error, sse_step, sse_token
 from thor.api.state import SessionTurn, get_store
@@ -123,13 +126,18 @@ async def post_wish(
                 ):
                     yield chunk
             elif plan.child_crew == "analytics_dashboard":
-                # Dashboard パスはまだ未実装 (CDV Adapter + VizPlanner が必要)
-                error_holder[0] = "NOT_IMPLEMENTED"
-                yield sse_error(
-                    "NOT_IMPLEMENTED",
-                    "AnalyticsCrew Dashboard パスは未実装です。"
-                    "現時点では Ingestion と Summary のみ対応しています。",
-                )
+                async for chunk in _handle_dashboard(
+                    request=request,
+                    user_ctx=user_ctx,
+                    session_id=session.session_id,
+                    turn_id=turn_id,
+                    fq_table_name=str(plan.inputs.get("fq_table_name", "")),
+                    question=str(plan.inputs.get("question") or body.prompt),
+                    artifacts_created=artifacts_created,
+                    response_md_parts=response_md_parts,
+                    error_holder=error_holder,
+                ):
+                    yield chunk
             else:
                 # child_crew='none' で skip_child=false は理論上ありえない
                 error_holder[0] = "INTERNAL_ERROR"
@@ -459,6 +467,155 @@ async def _handle_summary(
     response_md_parts.append(md)
     yield sse_token(md)
     yield sse_step("AnalyticsSummaryCrew", "done", "サマリーを作成しました。")
+
+
+# ------------------------------------------------------------------ #
+# Analytics Dashboard path
+# ------------------------------------------------------------------ #
+async def _handle_dashboard(
+    *,
+    request: Request,
+    user_ctx: UserContext,
+    session_id: str,
+    turn_id: str,
+    fq_table_name: str,
+    question: str,
+    artifacts_created: list[str],
+    response_md_parts: list[str],
+    error_holder: list[Optional[str]],
+) -> AsyncIterator[dict]:
+    """AnalyticsCrew (Dashboard) を走らせて SSE イベントを yield する。"""
+    if not fq_table_name or fq_table_name.count(".") != 2:
+        error_holder[0] = "ANALYTICS_MISSING_ARGS"
+        yield sse_error(
+            "ANALYTICS_MISSING_ARGS",
+            "ダッシュボード対象のテーブル (catalog.schema.table) が特定できませんでした。",
+        )
+        return
+
+    yield sse_step(
+        "AnalyticsDashboardCrew",
+        "running",
+        f"{fq_table_name} からダッシュボードを構築します...",
+    )
+
+    # UserContext を持ち込む session_id つきの派生を用意
+    scoped_ctx = UserContext(
+        user_name=user_ctx.user_name,
+        groups=user_ctx.groups,
+        knox_jwt=user_ctx.knox_jwt,
+        aws_credentials=user_ctx.aws_credentials,
+        session_id=session_id,
+    )
+
+    # crew.kickoff は同期 & LLM 呼び出し + CDV への複数 API 呼び出しで長い
+    # → to_thread で退避
+    def _run() -> dict:
+        token = set_user_context(scoped_ctx)
+        try:
+            return kickoff_analytics_dashboard(
+                user_ctx=scoped_ctx,
+                fq_table_name=fq_table_name,
+                question=question,
+            )
+        finally:
+            reset_user_context(token)
+
+    task = asyncio.create_task(asyncio.to_thread(_run))
+
+    # 実行中は 5 秒に 1 回進捗イベントを出しつつクライアント切断も監視する
+    while not task.done():
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=5.0)
+        except asyncio.TimeoutError:
+            if await request.is_disconnected():
+                task.cancel()
+                return
+            yield sse_step("AnalyticsDashboardCrew", "running", "Crew 実行中...")
+
+    result = await task
+    if result.get("status") != "ok":
+        code = result.get("error_code", "ANALYTICS_DASHBOARD_FAILED")
+        msg = result.get("message", "AnalyticsDashboard failed")
+        error_holder[0] = code
+        yield sse_error(code, msg)
+        return
+
+    dashboard = (result.get("payload") or {}).get("dashboard") or {}
+    if not dashboard or not dashboard.get("dashboard_url"):
+        # LLM が最終 JSON を組めなかった / CDV 応答が不完全だった
+        error_holder[0] = "ANALYTICS_DASHBOARD_FAILED"
+        yield sse_error(
+            "ANALYTICS_DASHBOARD_FAILED",
+            "ダッシュボードは作成されませんでした (最終 JSON が不完全)。",
+        )
+        return
+
+    md = _format_dashboard_markdown(dashboard, fq_table_name)
+
+    # dashboard artifact を artifact ストアに登録 (ResultPane が iframe で開く)
+    store = get_store()
+    art = store.register_artifact(
+        "dashboard",
+        ref={
+            "fq": fq_table_name,
+            "dashboard_id": dashboard.get("dashboard_id"),
+            "dashboard_url": dashboard.get("dashboard_url"),
+            "title": dashboard.get("title"),
+            "visual_ids": dashboard.get("visual_ids") or [],
+            "dataset_id": dashboard.get("dataset_id"),
+            "notes": dashboard.get("notes"),
+        },
+        session_id=session_id,
+    )
+    artifacts_created.append(art.artifact_id)
+
+    # entity_memory を更新して次ターンの「そのダッシュボード」参照に備える
+    store.update_entity_memory(
+        session_id,
+        {
+            "last_table": fq_table_name,
+            "last_dashboard_id": dashboard.get("dashboard_id"),
+            "last_dashboard_url": dashboard.get("dashboard_url"),
+        },
+    )
+
+    yield sse_artifact(
+        art.artifact_id,
+        "dashboard",
+        ref={
+            "fq": fq_table_name,
+            "dashboard_url": dashboard.get("dashboard_url"),
+        },
+    )
+    response_md_parts.append(md)
+    yield sse_token(md)
+    yield sse_step(
+        "AnalyticsDashboardCrew", "done", "ダッシュボードを作成しました。"
+    )
+
+
+def _format_dashboard_markdown(dashboard: dict, fq_table_name: str) -> str:
+    """BuildDashboardResult を ChatPane に流す Markdown にする。"""
+    title = dashboard.get("title") or f"{fq_table_name} のダッシュボード"
+    url = dashboard.get("dashboard_url") or ""
+    visual_count = len(dashboard.get("visual_ids") or [])
+    reused = dashboard.get("dataset_reused")
+
+    lines = [
+        f"**ダッシュボードを作成しました**: [{title}]({url})",
+        f"- 元テーブル: `{fq_table_name}`",
+        f"- Visual 数: {visual_count}",
+    ]
+    if reused is True:
+        lines.append("- Dataset: 既存を再利用")
+    elif reused is False:
+        lines.append("- Dataset: 新規作成")
+    notes = dashboard.get("notes")
+    if notes:
+        lines.append("")
+        lines.append(f"_notes_: {notes}")
+    return "\n".join(lines) + "\n"
 
 
 def _format_summary_markdown(report: dict, fq_table_name: str) -> str:
