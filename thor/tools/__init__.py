@@ -9,7 +9,7 @@ Router / CDV / Viz)。
   Trino:      :class:`TrinoQueryTool`, :class:`TrinoDDLTool`, :class:`TrinoMetaTool`
   Iceberg:    :class:`TableExistsTool`, :class:`IcebergCreateTableTool`
   Format:     :class:`MagicByteTool`, :class:`CSVSnifferTool`, :class:`ParquetMetaTool`
-  Excel:      :class:`ExcelHeaderDetectTool`
+  Excel:      :class:`ExcelHeaderDetectTool`, :class:`ExcelHeaderValidateTool`
   Schema:     :class:`TypeInferTool`, :class:`NameProposerTool`
   DataFrame:  :class:`DataFramePreviewTool`
   Ossie:      :class:`OssieReadTool`, :class:`OssieWriteTool`, :class:`OssieSearchTool`,
@@ -32,7 +32,7 @@ from thor.tools.cdv import (
     CDVVisualTool,
 )
 from thor.tools.dataframe import DataFramePreviewTool
-from thor.tools.excel import ExcelHeaderDetectTool
+from thor.tools.excel import ExcelHeaderDetectTool, ExcelHeaderValidateTool
 from thor.tools.format import CSVSnifferTool, MagicByteTool, ParquetMetaTool
 from thor.tools.iceberg import IcebergCreateTableTool, TableExistsTool
 from thor.tools.ossie import (
@@ -64,6 +64,7 @@ __all__ = [
     "ParquetMetaTool",
     # excel
     "ExcelHeaderDetectTool",
+    "ExcelHeaderValidateTool",
     # schema
     "TypeInferTool",
     "NameProposerTool",

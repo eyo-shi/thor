@@ -1,11 +1,15 @@
 """Excel ヘッダー検出 Tool。
 
-「上部にメタ K/V → 空行 → 表ヘッダー → データ行」パターンに対応する
-ヒューリスティック検出。プラン記載の 2 段構え (heuristic → LLM 検証) のうち、
-ここでは **heuristic** のみ実装。LLM 検証は Ingestion Crew の後続タスクで
-呼び出す想定 (task #10)。
+「上部にメタ K/V → 空行 → 表ヘッダー → データ行」パターンに対応する。
+プラン記載の 2 段構え:
 
-主要メトリクス:
+  * **Step 1 (heuristic)**: :class:`ExcelHeaderDetectTool` — 非空セル数の急増と
+    直下 5 行の型均一性で候補行を選ぶ。
+  * **Step 2 (LLM 検証)**: :class:`ExcelHeaderValidateTool` — heuristic の候補
+    行と周辺 10 行を LLM に見せ、妥当性を JSON で判定させる。LLM が使えない
+    (未インストール / 環境変数不足) 場合は heuristic を素通しする。
+
+Heuristic の主要メトリクス:
   * 行ごとの非空セル数
   * 型均一性: 直下 5 行の型の一致率 (数値優勢 or 文字列優勢)
   * セル長中央値
@@ -13,12 +17,14 @@
 from __future__ import annotations
 
 import io
+import json
 import statistics
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
 from thor.transport.errors import ErrorCode, err, ok
+from thor.transport.llm import try_json_completion
 from thor.transport.logging import get_logger
 from thor.transport.tool_base import BaseThorTool
 from thor.transport.user_context import UserContext
@@ -213,3 +219,161 @@ def _stringify(v: Any) -> str:
     if isinstance(v, float) and v.is_integer():
         return str(int(v))
     return str(v)
+
+
+# ------------------------------------------------------------------ #
+# ExcelHeaderValidateTool (Step 2: LLM 検証段)
+# ------------------------------------------------------------------ #
+class _SheetCandidate(BaseModel):
+    """1 シートあたりの LLM 検証入力。"""
+
+    sheet: str
+    header_row: Optional[int] = Field(
+        None, description="heuristic が推定した 0-indexed ヘッダー行。None なら未検出。"
+    )
+    columns: list[str] = Field(default_factory=list)
+    meta_kv: list[dict[str, Any]] = Field(default_factory=list)
+    surrounding_rows: list[list[Any]] = Field(
+        default_factory=list,
+        description="candidate 前後 10 行 (合計 21 行以内)。表構造の妥当性判定用。",
+    )
+
+
+class ExcelHeaderValidateArgs(BaseModel):
+    candidates: list[_SheetCandidate] = Field(
+        ...,
+        description=(
+            ":class:`ExcelHeaderDetectTool` の出力から作った 1 シートあたりの "
+            "候補一覧 (surrounding_rows を付与したもの)。"
+        ),
+    )
+    model: Optional[str] = Field(
+        None,
+        description="明示モデル ID。未指定なら THOR_LLM_ROUTER_MODEL を使う。",
+    )
+
+
+class ExcelHeaderValidateTool(BaseThorTool):
+    """Heuristic が推定した Excel ヘッダー行を LLM に妥当性判定させる。
+
+    LLM が使えない環境 (litellm 未インストール / CAI_INFERENCE_* 未設定 /
+    JSON パース失敗) では **heuristic を素通し** で承認する
+    (``is_valid=True, confidence="low", source="fallback"``)。デモ環境や
+    テストで LLM 依存を持ち込まないための設計。
+
+    LLM への要求は 1 シート 1 プロンプト (バッチしない — トークン膨張の防止)。
+    """
+
+    name: str = "excel_header_validate"
+    description: str = (
+        "For each sheet candidate (heuristic-detected header row + surrounding "
+        "10 rows), ask an LLM whether the row is truly a table header. Falls "
+        "back to accepting the heuristic when no LLM is configured."
+    )
+    args_schema: type[BaseModel] = ExcelHeaderValidateArgs
+    requires_auth: bool = False  # LLM 呼び出しは api_key 環境変数で完結
+
+    def run(
+        self,
+        user_ctx: Optional[UserContext],
+        candidates: list[dict[str, Any]] | list[_SheetCandidate],
+        model: Optional[str] = None,
+        **_: Any,
+    ) -> dict[str, Any]:
+        # crewai が dict のまま渡してくる可能性を許容
+        parsed: list[_SheetCandidate] = []
+        for c in candidates:
+            if isinstance(c, _SheetCandidate):
+                parsed.append(c)
+            elif isinstance(c, dict):
+                try:
+                    parsed.append(_SheetCandidate(**c))
+                except Exception as e:  # noqa: BLE001 - pydantic の失敗を包む
+                    return err(
+                        ErrorCode.FORMAT_EXCEL_HEADER_UNDETECTED,
+                        f"invalid candidate: {e}",
+                    )
+            else:
+                return err(
+                    ErrorCode.FORMAT_EXCEL_HEADER_UNDETECTED,
+                    f"unsupported candidate type: {type(c).__name__}",
+                )
+
+        validations: list[dict[str, Any]] = []
+        for cand in parsed:
+            validations.append(_validate_one(cand, model=model))
+        return ok({"validations": validations})
+
+
+def _validate_one(
+    cand: _SheetCandidate, *, model: Optional[str]
+) -> dict[str, Any]:
+    """1 シート分の妥当性判定。LLM 使用可否は :func:`try_json_completion` に委ねる。"""
+    base: dict[str, Any] = {
+        "sheet": cand.sheet,
+        "candidate_header_row": cand.header_row,
+        "columns": cand.columns,
+    }
+
+    if cand.header_row is None:
+        # heuristic 自体が未検出。LLM に頼らず素直にエラー扱い。
+        return {
+            **base,
+            "is_valid": False,
+            "confidence": "low",
+            "source": "heuristic",
+            "reason": "heuristic could not locate a header row",
+        }
+
+    prompt = _build_validation_prompt(cand)
+    llm_result = try_json_completion(prompt, model=model, max_tokens=256)
+    if llm_result is None:
+        # LLM 使えない環境 → heuristic を素通し
+        return {
+            **base,
+            "is_valid": True,
+            "confidence": "low",
+            "source": "fallback",
+            "reason": "LLM not configured; accepting heuristic result",
+        }
+
+    # LLM が返した JSON の形式を極力弾力的に受ける
+    is_valid = bool(llm_result.get("is_valid", False))
+    revised = llm_result.get("revised_header_row")
+    revised_int: Optional[int] = None
+    if isinstance(revised, int):
+        revised_int = revised
+    elif isinstance(revised, str) and revised.lstrip("-").isdigit():
+        revised_int = int(revised)
+    return {
+        **base,
+        "is_valid": is_valid,
+        "revised_header_row": revised_int,
+        "confidence": str(llm_result.get("confidence", "medium")),
+        "source": "llm",
+        "reason": str(llm_result.get("reason", ""))[:500],
+    }
+
+
+def _build_validation_prompt(cand: _SheetCandidate) -> str:
+    """LLM に渡すプロンプトを組み立てる。返信は必ず JSON。"""
+    body = {
+        "sheet": cand.sheet,
+        "candidate_header_row_index": cand.header_row,
+        "candidate_header_values": cand.columns,
+        "meta_kv_above_header": cand.meta_kv,
+        "surrounding_rows": cand.surrounding_rows,
+    }
+    return (
+        "You are validating whether a spreadsheet row is really a table header.\n"
+        "Look at the CANDIDATE header row values, the meta key/value pairs above "
+        "it, and the surrounding rows. Decide:\n"
+        "  - is_valid (bool): is the candidate a genuine table header?\n"
+        "  - revised_header_row (int|null): if not, propose a better row index "
+        "in the surrounding_rows window; use null when confident it's correct.\n"
+        "  - confidence: 'high'|'medium'|'low'.\n"
+        "  - reason: one sentence in English or Japanese, <=200 chars.\n\n"
+        "Reply with ONLY a JSON object of shape "
+        "{is_valid, revised_header_row, confidence, reason}.\n\n"
+        f"INPUT:\n{json.dumps(body, ensure_ascii=False, default=str)}"
+    )
