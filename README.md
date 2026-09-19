@@ -26,25 +26,30 @@ thor_ui/        React + TypeScript + Vite (3 ペイン UI)
 
 semantic/       Apache Ossie YAML の Git 管理領域
 tests/          pytest
-application.json  Cloudera AI Workbench Application マニフェスト
+agent_studio_manifest/     Agent Studio 用 tools/agents/crews YAML (自動生成)
+.project-metadata.yaml     Cloudera AI Workbench (AMP) マニフェスト
+application.json           Workbench Application 起動定義
 pyproject.toml
 ```
 
 ## 実装ステータス
 
-現在: **骨格作成のみ**。実装は以下の順で進める (プランの実装優先順位より):
+MVP 実装完了。以下の全レイヤが `main` に入っている:
 
-1. `thor.transport` (Knox JWT / HTTP / logging)
-2. Trino / Iceberg / S3 Tool
-3. `thor.ingestion.IngestionCrew` + `thor.semantic` 書き込み
-4. `thor.analytics.AnalyticsCrew` (Summary)
-5. `thor.analytics.AnalyticsCrew` (Dashboard, CDV Adapter)
-6. `thor.router.RouterCrew` + Entity Memory
-7. `thor.api` (FastAPI, `/api/wish` SSE ほか)
-8. `thor_ui` の 3 ペイン中身
-9. Excel ヘッダー検出の LLM 検証段
-10. デモモード (`THOR_DEMO_MODE=warm`)
-11. Workbench Application 登録
+| モジュール | 内容 |
+|---|---|
+| `thor.transport` | Knox JWT / user_context / HTTP client / structlog / `BaseThorTool` |
+| `thor.tools` | S3 / Trino / フォーマット判定 / Excel ヘッダー検出 (heuristic + LLM 検証) / CDV |
+| `thor.ingestion.IngestionCrew` | S3 → Iceberg → Ossie の 8 タスク Sequential パイプライン |
+| `thor.analytics.AnalyticsCrew` | Summary パス (2 タスク) + Dashboard パス (4 タスク、VizPlanner + CDV) |
+| `thor.router.RouterCrew` | intent 分類 + Python レベルディスパッチ |
+| `thor.api` | FastAPI (`/api/wish` SSE / `/api/catalog` / `/api/files/preview` / `/api/query` / `/api/artifacts` / SPA mount) |
+| `thor_ui` | React + Vite 3 ペイン UI (TreePane / ResultPane 5 タブ / ChatPane SSE) |
+| `thor.demo.warm` | `THOR_DEMO_MODE=warm` のキャンド応答フォールバック |
+| `thor.manifest` | Python 定義から Agent Studio manifest (`tools.yaml` / `agents.yaml` / `crews.yaml`) を自動生成 |
+| `.project-metadata.yaml` | Cloudera AI Workbench (AMP) 登録用マニフェスト |
+
+未着手 (v2 候補): TablePreview の仮想スクロール、Ossie バッジの実 YAML 判定、セッション履歴の hydrate、Analytics の Hierarchical Process 移行。
 
 ## 開発
 
@@ -55,7 +60,7 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -e '.[dev]'
 pytest             # スモークテスト
-uvicorn thor.api.main:app --reload   # (main.py 実装後)
+uvicorn thor.api.main:app --reload   # http://127.0.0.1:8000
 ```
 
 ### フロントエンド
