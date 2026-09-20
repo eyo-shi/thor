@@ -56,4 +56,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # Jupyter kernel (run_session) は SystemExit を例外として catch し、
+    # rc=0 でも CML engine が失敗扱いにする。成功時は素通りさせる。
+    _rc = main()
+    if _rc:
+        raise SystemExit(_rc)
