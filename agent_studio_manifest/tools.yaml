@@ -5,10 +5,219 @@
 version: 1
 generated_from: thor.tools
 tools:
+- name: analytics_kickoff
+  class_path: thor.router.tools.AnalyticsKickoffTool
+  description: 'Tool Name: analytics_kickoff
+
+    Tool Arguments: {''mode'': {''description'': ''summary は例3、dashboard は例2'', ''type'': ''Literal[summary, dashboard]''},
+    ''fq_table_name'': {''description'': ''対象 Iceberg テーブルの fq 名'', ''type'': ''str''}, ''question'': {''description'': ''ユーザーの元の日本語質問
+    (Text2SQL のヒント)'', ''type'': ''Union[str, NoneType]''}}
+
+    Tool Description: Kick off the Analytics Crew for summary or dashboard on the given fully-qualified Iceberg table. NOT
+    YET IMPLEMENTED.'
+  requires_auth: true
+  args_schema:
+    properties:
+      mode:
+        description: summary は例3、dashboard は例2
+        enum:
+        - summary
+        - dashboard
+        title: Mode
+        type: string
+      fq_table_name:
+        description: 対象 Iceberg テーブルの fq 名
+        minLength: 1
+        title: Fq Table Name
+        type: string
+      question:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        description: ユーザーの元の日本語質問 (Text2SQL のヒント)
+        title: Question
+    required:
+    - mode
+    - fq_table_name
+    title: AnalyticsKickoffArgs
+    type: object
+- name: cdv_dashboard_create
+  class_path: thor.tools.cdv.CDVDashboardTool
+  description: 'Tool Name: cdv_dashboard_create
+
+    Tool Arguments: {''title'': {''description'': ''Dashboard タイトル'', ''type'': ''str''}, ''visual_ids'': {''description'':
+    ''ダッシュボードに載せる Visual ID'', ''type'': ''list[str]''}, ''layout'': {''description'': None, ''type'': ''Union[list[dict[str,
+    Any]], NoneType]''}, ''description'': {''description'': None, ''type'': ''Union[str, NoneType]''}}
+
+    Tool Description: Create a CDV dashboard that contains one or more visuals. Returns {dashboard_id, dashboard_url, title}.
+    The dashboard_url is iframe-embeddable and inherits the caller''s Knox session.'
+  requires_auth: true
+  args_schema:
+    properties:
+      title:
+        description: Dashboard タイトル
+        maxLength: 256
+        title: Title
+        type: string
+      visual_ids:
+        description: ダッシュボードに載せる Visual ID
+        items:
+          type: string
+        minItems: 1
+        title: Visual Ids
+        type: array
+      layout:
+        anyOf:
+        - items:
+            additionalProperties: true
+            type: object
+          type: array
+        - type: 'null'
+        default: null
+        title: Layout
+      description:
+        anyOf:
+        - maxLength: 1024
+          type: string
+        - type: 'null'
+        default: null
+        title: Description
+    required:
+    - title
+    - visual_ids
+    title: CDVDashboardArgs
+    type: object
+- name: cdv_dataset_create_or_get
+  class_path: thor.tools.cdv.CDVDatasetTool
+  description: 'Tool Name: cdv_dataset_create_or_get
+
+    Tool Arguments: {''fq_table_name'': {''description'': ''catalog.schema.table'', ''type'': ''str''}, ''display_name'':
+    {''description'': None, ''type'': ''Union[str, NoneType]''}, ''connection_id'': {''description'': None, ''type'': ''Union[str,
+    NoneType]''}, ''reuse_if_exists'': {''description'': None, ''type'': ''bool''}}
+
+    Tool Description: Create or reuse a CDV Dataset for a given Iceberg fq_table_name. Returns {dataset_id, display_name,
+    connection_id, created}. If a dataset already exists for this table on the connection, it is returned without creating
+    a new one.'
+  requires_auth: true
+  args_schema:
+    properties:
+      fq_table_name:
+        description: catalog.schema.table
+        title: Fq Table Name
+        type: string
+      display_name:
+        anyOf:
+        - maxLength: 256
+          type: string
+        - type: 'null'
+        default: null
+        title: Display Name
+      connection_id:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        title: Connection Id
+      reuse_if_exists:
+        default: true
+        title: Reuse If Exists
+        type: boolean
+    required:
+    - fq_table_name
+    title: CDVDatasetArgs
+    type: object
+- name: cdv_startup_check
+  class_path: thor.tools.cdv.CDVStartupCheckTool
+  description: 'Tool Name: cdv_startup_check
+
+    Tool Arguments: {}
+
+    Tool Description: Ping the Cloudera Data Visualization endpoint to verify it is running. Returns {running: bool, endpoint:
+    str, version: str}. On failure returns error_code=CDV_NOT_RUNNING with a hint that the user should start CDV from the
+    Workbench Data menu once.'
+  requires_auth: true
+  args_schema:
+    description: 引数無し (シグネチャ互換のため空スキーマ)。
+    properties: {}
+    title: CDVStartupCheckArgs
+    type: object
+- name: cdv_visual_create
+  class_path: thor.tools.cdv.CDVVisualTool
+  description: 'Tool Name: cdv_visual_create
+
+    Tool Arguments: {''dataset_id'': {''description'': ''CDV Dataset ID'', ''type'': ''str''}, ''name'': {''description'':
+    ''Visual の表示名'', ''type'': ''str''}, ''viz_type'': {''description'': ''line | bar | pie | kpi | table'', ''type'': ''str''},
+    ''x'': {''description'': ''X 軸カラム (line/bar 系で必須)'', ''type'': ''Union[str, NoneType]''}, ''y'': {''description'': ''Y
+    軸カラム (measure)'', ''type'': ''Union[str, NoneType]''}, ''aggregation'': {''description'': ''sum | avg | count | min |
+    max'', ''type'': ''str''}, ''group_by'': {''description'': ''第 2 分岐カラム (色分けなど)'', ''type'': ''Union[str, NoneType]''},
+    ''limit'': {''description'': None, ''type'': ''int''}}
+
+    Tool Description: Create a single CDV visual (line/bar/pie/kpi/table) on top of a dataset. Returns {visual_id, name, viz_type}.
+    Use cdv_dashboard_create afterwards to combine visuals into a dashboard.'
+  requires_auth: true
+  args_schema:
+    properties:
+      dataset_id:
+        description: CDV Dataset ID
+        title: Dataset Id
+        type: string
+      name:
+        description: Visual の表示名
+        maxLength: 256
+        title: Name
+        type: string
+      viz_type:
+        description: line | bar | pie | kpi | table
+        title: Viz Type
+        type: string
+      x:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        description: X 軸カラム (line/bar 系で必須)
+        title: X
+      y:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        description: Y 軸カラム (measure)
+        title: Y
+      aggregation:
+        default: sum
+        description: sum | avg | count | min | max
+        title: Aggregation
+        type: string
+      group_by:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        description: 第 2 分岐カラム (色分けなど)
+        title: Group By
+      limit:
+        default: 1000
+        maximum: 100000
+        minimum: 1
+        title: Limit
+        type: integer
+    required:
+    - dataset_id
+    - name
+    - viz_type
+    title: CDVVisualArgs
+    type: object
 - name: csv_sniff
   class_path: thor.tools.format.CSVSnifferTool
-  description: Detect encoding, delimiter, quotechar and whether the first row is a header for a CSV/TSV sample. Returns preview
-    rows.
+  description: 'Tool Name: csv_sniff
+
+    Tool Arguments: {''content_b64'': {''description'': ''先頭バイト列 (base64)'', ''type'': ''str''}, ''max_sample_bytes'': {''description'':
+    None, ''type'': ''int''}}
+
+    Tool Description: Detect encoding, delimiter, quotechar and whether the first row is a header for a CSV/TSV sample. Returns
+    preview rows.'
   requires_auth: false
   args_schema:
     properties:
@@ -28,8 +237,17 @@ tools:
     type: object
 - name: dataframe_preview
   class_path: thor.tools.dataframe.DataFramePreviewTool
-  description: 'Read an S3-hosted file into a pandas DataFrame and return a small preview: column names, per-column sample
-    values, first N rows. Format-specific hints (encoding, delimiter, sheet, header_row) should come from the FormatSniffer
+  description: 'Tool Name: dataframe_preview
+
+    Tool Arguments: {''bucket'': {''description'': None, ''type'': ''str''}, ''key'': {''description'': None, ''type'': ''str''},
+    ''format'': {''description'': ''csv / tsv / xlsx / xls / parquet / json のいずれか'', ''type'': ''str''}, ''max_rows'': {''description'':
+    None, ''type'': ''int''}, ''encoding'': {''description'': ''CSVSniffer 結果を渡す'', ''type'': ''Union[str, NoneType]''}, ''delimiter'':
+    {''description'': ''CSVSniffer 結果を渡す'', ''type'': ''Union[str, NoneType]''}, ''sheet'': {''description'': None, ''type'':
+    ''Union[str, NoneType]''}, ''header_row'': {''description'': ''ExcelHeaderDetect 結果を渡す (0-indexed)'', ''type'': ''Union[int,
+    NoneType]''}, ''json_lines'': {''description'': ''JSONL 形式なら True'', ''type'': ''bool''}}
+
+    Tool Description: Read an S3-hosted file into a pandas DataFrame and return a small preview: column names, per-column
+    sample values, first N rows. Format-specific hints (encoding, delimiter, sheet, header_row) should come from the FormatSniffer
     / ExcelHeaderDetect result.'
   requires_auth: true
   args_schema:
@@ -88,10 +306,34 @@ tools:
     - format
     title: DataFramePreviewArgs
     type: object
+- name: entity_memory_read
+  class_path: thor.router.tools.EntityMemoryReadTool
+  description: 'Tool Name: entity_memory_read
+
+    Tool Arguments: {''session_id'': {''description'': ''対象セッション ID (X-Thor-Session-Id)'', ''type'': ''str''}}
+
+    Tool Description: Read the current chat session''s entity memory (last_table, last_dashboard_id, last_s3_path, last_ossie_path,
+    ...) so that you can resolve pronouns like ''そのテーブル'' / ''that dashboard''.'
+  requires_auth: false
+  args_schema:
+    properties:
+      session_id:
+        description: 対象セッション ID (X-Thor-Session-Id)
+        title: Session Id
+        type: string
+    required:
+    - session_id
+    title: EntityMemoryReadArgs
+    type: object
 - name: excel_header_detect
   class_path: thor.tools.excel.ExcelHeaderDetectTool
-  description: For an S3-hosted xlsx, detect the header row and meta key/value area for each sheet using a heuristic. The
-    primary sheet is the one with the largest data range.
+  description: 'Tool Name: excel_header_detect
+
+    Tool Arguments: {''bucket'': {''description'': None, ''type'': ''str''}, ''key'': {''description'': None, ''type'': ''str''},
+    ''sheet'': {''description'': ''対象シート名 (省略時は全シート走査、data range 最大を主とする)'', ''type'': ''Union[str, NoneType]''}}
+
+    Tool Description: For an S3-hosted xlsx, detect the header row and meta key/value area for each sheet using a heuristic.
+    The primary sheet is the one with the largest data range.'
   requires_auth: true
   args_schema:
     properties:
@@ -113,10 +355,84 @@ tools:
     - key
     title: ExcelHeaderDetectArgs
     type: object
+- name: excel_header_validate
+  class_path: thor.tools.excel.ExcelHeaderValidateTool
+  description: 'Tool Name: excel_header_validate
+
+    Tool Arguments: {''candidates'': {''description'': '':class:`ExcelHeaderDetectTool` の出力から作った 1 シートあたりの 候補一覧 (surrounding_rows
+    を付与したもの)。'', ''type'': ''list[_SheetCandidate]''}, ''model'': {''description'': ''明示モデル ID。未指定なら THOR_LLM_ROUTER_MODEL
+    を使う。'', ''type'': ''Union[str, NoneType]''}}
+
+    Tool Description: For each sheet candidate (heuristic-detected header row + surrounding 10 rows), ask an LLM whether the
+    row is truly a table header. Falls back to accepting the heuristic when no LLM is configured.'
+  requires_auth: false
+  args_schema:
+    $defs:
+      _SheetCandidate:
+        description: 1 シートあたりの LLM 検証入力。
+        properties:
+          sheet:
+            title: Sheet
+            type: string
+          header_row:
+            anyOf:
+            - type: integer
+            - type: 'null'
+            default: null
+            description: heuristic が推定した 0-indexed ヘッダー行。None なら未検出。
+            title: Header Row
+          columns:
+            items:
+              type: string
+            title: Columns
+            type: array
+          meta_kv:
+            items:
+              additionalProperties: true
+              type: object
+            title: Meta Kv
+            type: array
+          surrounding_rows:
+            description: candidate 前後 10 行 (合計 21 行以内)。表構造の妥当性判定用。
+            items:
+              items: {}
+              type: array
+            title: Surrounding Rows
+            type: array
+        required:
+        - sheet
+        title: _SheetCandidate
+        type: object
+    properties:
+      candidates:
+        description: :class:`ExcelHeaderDetectTool` の出力から作った 1 シートあたりの 候補一覧 (surrounding_rows を付与したもの)。
+        items:
+          $ref: '#/$defs/_SheetCandidate'
+        title: Candidates
+        type: array
+      model:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        description: 明示モデル ID。未指定なら THOR_LLM_ROUTER_MODEL を使う。
+        title: Model
+    required:
+    - candidates
+    title: ExcelHeaderValidateArgs
+    type: object
 - name: iceberg_create_table
   class_path: thor.tools.iceberg.IcebergCreateTableTool
-  description: Create an empty Iceberg table from a structured column list. Returns the executed DDL so the caller can log
-    it. Callers MUST set max_retries=0.
+  description: 'Tool Name: iceberg_create_table
+
+    Tool Arguments: {''catalog'': {''description'': None, ''type'': ''str''}, ''schema_'': {''description'': None, ''type'':
+    ''str''}, ''table'': {''description'': None, ''type'': ''str''}, ''columns'': {''description'': None, ''type'': ''list[ColumnDef]''},
+    ''partitioning'': {''description'': ''例: ["month(order_date)", "region"]'', ''type'': ''list[str]''}, ''location'': {''description'':
+    ''Iceberg テーブルの物理配置 (S3 URI)'', ''type'': ''Union[str, NoneType]''}, ''if_not_exists'': {''description'': ''IF NOT EXISTS
+    を付ける (衝突チェック済み前提なら False にする)'', ''type'': ''bool''}}
+
+    Tool Description: Create an empty Iceberg table from a structured column list. Returns the executed DDL so the caller
+    can log it. Callers MUST set max_retries=0.'
   requires_auth: true
   args_schema:
     $defs:
@@ -184,10 +500,48 @@ tools:
     - columns
     title: IcebergCreateArgs
     type: object
+- name: ingestion_kickoff
+  class_path: thor.router.tools.IngestionKickoffTool
+  description: 'Tool Name: ingestion_kickoff
+
+    Tool Arguments: {''bucket'': {''description'': ''S3 バケット名'', ''type'': ''str''}, ''key'': {''description'': ''S3 オブジェクトキー'',
+    ''type'': ''str''}, ''target_schema'': {''description'': ''Trino/Iceberg スキーマ (default: demo)'', ''type'': ''str''}}
+
+    Tool Description: Kick off the Ingestion Crew for a given s3://<bucket>/<key> and target Iceberg schema. Returns the final
+    IngestionReport.'
+  requires_auth: true
+  args_schema:
+    properties:
+      bucket:
+        description: S3 バケット名
+        minLength: 1
+        title: Bucket
+        type: string
+      key:
+        description: S3 オブジェクトキー
+        minLength: 1
+        title: Key
+        type: string
+      target_schema:
+        default: demo
+        description: 'Trino/Iceberg スキーマ (default: demo)'
+        minLength: 1
+        title: Target Schema
+        type: string
+    required:
+    - bucket
+    - key
+    title: IngestionKickoffArgs
+    type: object
 - name: magic_byte
   class_path: thor.tools.format.MagicByteTool
-  description: 'Identify file format from the first few bytes (base64). Returns one of: xlsx, xls, parquet, orc, avro, gzip,
-    bzip2, zstd, pdf, png, jpeg, json, csv, tsv, text, or unknown.'
+  description: 'Tool Name: magic_byte
+
+    Tool Arguments: {''content_b64'': {''description'': ''判定対象の先頭バイト列 (base64)。S3GetRangeTool の出力を渡す。'', ''type'': ''str''},
+    ''filename_hint'': {''description'': ''判定に失敗した場合の補助として使うファイル名 (拡張子)'', ''type'': ''Union[str, NoneType]''}}
+
+    Tool Description: Identify file format from the first few bytes (base64). Returns one of: xlsx, xls, parquet, orc, avro,
+    gzip, bzip2, zstd, pdf, png, jpeg, json, csv, tsv, text, or unknown.'
   requires_auth: false
   args_schema:
     properties:
@@ -208,7 +562,14 @@ tools:
     type: object
 - name: name_proposer
   class_path: thor.tools.schema.NameProposerTool
-  description: Propose a Trino-friendly snake_case table name from a filename or S3 key. Returns proposed_table_name and fq_name.
+  description: 'Tool Name: name_proposer
+
+    Tool Arguments: {''source_hint'': {''description'': ''ファイル名 / S3 キー / シート名など、命名の元ネタ'', ''type'': ''str''}, ''schema_prefix'':
+    {''description'': ''生成する fq 名の schema。省略時は table 名のみ'', ''type'': ''Union[str, NoneType]''}, ''catalog'': {''description'':
+    None, ''type'': ''str''}}
+
+    Tool Description: Propose a Trino-friendly snake_case table name from a filename or S3 key. Returns proposed_table_name
+    and fq_name.'
   requires_auth: false
   args_schema:
     properties:
@@ -233,7 +594,12 @@ tools:
     type: object
 - name: ossie_read
   class_path: thor.tools.ossie.OssieReadTool
-  description: Read one Ossie dataset YAML by its fully-qualified name (catalog.schema.table). Returns the dataset as a dict.
+  description: 'Tool Name: ossie_read
+
+    Tool Arguments: {''fq_name'': {''description'': ''読み出したいデータセットの fq_name'', ''type'': ''str''}}
+
+    Tool Description: Read one Ossie dataset YAML by its fully-qualified name (catalog.schema.table). Returns the dataset
+    as a dict.'
   requires_auth: false
   args_schema:
     properties:
@@ -247,7 +613,12 @@ tools:
     type: object
 - name: ossie_search
   class_path: thor.tools.ossie.OssieSearchTool
-  description: Find the top-k Ossie datasets most relevant to a natural-language query. Used by Text-to-SQL RAG.
+  description: 'Tool Name: ossie_search
+
+    Tool Arguments: {''query'': {''description'': ''自然言語のクエリ (Text2SQL 用)'', ''type'': ''str''}, ''top_k'': {''description'':
+    None, ''type'': ''int''}}
+
+    Tool Description: Find the top-k Ossie datasets most relevant to a natural-language query. Used by Text-to-SQL RAG.'
   requires_auth: false
   args_schema:
     properties:
@@ -267,8 +638,13 @@ tools:
     type: object
 - name: ossie_write
   class_path: thor.tools.ossie.OssieWriteTool
-  description: Persist an Ossie dataset YAML under THOR_SEMANTIC_ROOT/datasets/<catalog>/<schema>/<table>.yaml. If commit=true,
-    git-add and commit the file.
+  description: 'Tool Name: ossie_write
+
+    Tool Arguments: {''dataset'': {''description'': ''Ossie dataset (name, fq_name, source, dimensions, measures, ...) の dict'',
+    ''type'': ''dict[str, Any]''}, ''commit'': {''description'': ''Git add + commit まで行う場合 True。push はしない。'', ''type'': ''bool''}}
+
+    Tool Description: Persist an Ossie dataset YAML under THOR_SEMANTIC_ROOT/datasets/<catalog>/<schema>/<table>.yaml. If
+    commit=true, git-add and commit the file.'
   requires_auth: true
   args_schema:
     properties:
@@ -288,8 +664,12 @@ tools:
     type: object
 - name: parquet_meta
   class_path: thor.tools.format.ParquetMetaTool
-  description: Read the Parquet footer metadata (schema, num_rows, num_row_groups) for an S3-hosted Parquet file. Streaming;
-    no full download.
+  description: 'Tool Name: parquet_meta
+
+    Tool Arguments: {''bucket'': {''description'': None, ''type'': ''str''}, ''key'': {''description'': None, ''type'': ''str''}}
+
+    Tool Description: Read the Parquet footer metadata (schema, num_rows, num_row_groups) for an S3-hosted Parquet file. Streaming;
+    no full download.'
   requires_auth: true
   args_schema:
     properties:
@@ -306,8 +686,14 @@ tools:
     type: object
 - name: s3_get_range
   class_path: thor.tools.s3.S3GetRangeTool
-  description: Fetch a byte range of an S3 object and return it as base64. Intended for format sniffing (first ~1MB); do not
-    use for full downloads.
+  description: 'Tool Name: s3_get_range
+
+    Tool Arguments: {''bucket'': {''description'': ''S3 バケット名'', ''type'': ''str''}, ''key'': {''description'': ''オブジェクトキー'',
+    ''type'': ''str''}, ''start'': {''description'': ''開始オフセット (バイト)'', ''type'': ''int''}, ''length'': {''description'':
+    ''取得バイト数 (最大 10 MiB)'', ''type'': ''int''}}
+
+    Tool Description: Fetch a byte range of an S3 object and return it as base64. Intended for format sniffing (first ~1MB);
+    do not use for full downloads.'
   requires_auth: true
   args_schema:
     properties:
@@ -339,7 +725,13 @@ tools:
     type: object
 - name: s3_head
   class_path: thor.tools.s3.S3HeadTool
-  description: Get metadata (size, content-type, etag, last-modified) for a single S3 object without downloading the body.
+  description: 'Tool Name: s3_head
+
+    Tool Arguments: {''bucket'': {''description'': ''S3 バケット名'', ''type'': ''str''}, ''key'': {''description'': ''オブジェクトキー'',
+    ''type'': ''str''}}
+
+    Tool Description: Get metadata (size, content-type, etag, last-modified) for a single S3 object without downloading the
+    body.'
   requires_auth: true
   args_schema:
     properties:
@@ -358,8 +750,14 @@ tools:
     type: object
 - name: s3_list
   class_path: thor.tools.s3.S3ListTool
-  description: List objects and sub-prefixes under an S3 bucket/prefix. Use delimiter='/' to walk the tree one level at a
-    time.
+  description: 'Tool Name: s3_list
+
+    Tool Arguments: {''bucket'': {''description'': ''S3 バケット名'', ''type'': ''str''}, ''prefix'': {''description'': ''キーの prefix
+    (フォルダ相当)'', ''type'': ''str''}, ''delimiter'': {''description'': "prefix delimiter (階層列挙する場合は ''/'')", ''type'': ''str''},
+    ''max_keys'': {''description'': ''1 コールで返す最大件数'', ''type'': ''int''}}
+
+    Tool Description: List objects and sub-prefixes under an S3 bucket/prefix. Use delimiter=''/'' to walk the tree one level
+    at a time.'
   requires_auth: true
   args_schema:
     properties:
@@ -390,8 +788,13 @@ tools:
     type: object
 - name: similar_table_search
   class_path: thor.tools.ossie.SimilarTableSearchTool
-  description: List existing datasets whose name is identical or similar to the proposed table name. Use before CREATE TABLE
-    to warn about name collisions.
+  description: 'Tool Name: similar_table_search
+
+    Tool Arguments: {''proposed_name'': {''description'': ''これから作ろうとしているテーブル名'', ''type'': ''str''}, ''top_k'': {''description'':
+    None, ''type'': ''int''}}
+
+    Tool Description: List existing datasets whose name is identical or similar to the proposed table name. Use before CREATE
+    TABLE to warn about name collisions.'
   requires_auth: false
   args_schema:
     properties:
@@ -411,8 +814,13 @@ tools:
     type: object
 - name: table_exists
   class_path: thor.tools.iceberg.TableExistsTool
-  description: Check whether an Iceberg/Trino table already exists. If it does, return its column definitions so the caller
-    can decide whether to overwrite or pick another name.
+  description: 'Tool Name: table_exists
+
+    Tool Arguments: {''catalog'': {''description'': None, ''type'': ''str''}, ''schema_'': {''description'': None, ''type'':
+    ''str''}, ''table'': {''description'': None, ''type'': ''str''}}
+
+    Tool Description: Check whether an Iceberg/Trino table already exists. If it does, return its column definitions so the
+    caller can decide whether to overwrite or pick another name.'
   requires_auth: true
   args_schema:
     properties:
@@ -433,8 +841,13 @@ tools:
     type: object
 - name: trino_ddl
   class_path: thor.tools.trino.TrinoDDLTool
-  description: Execute a mutating Trino statement (CREATE / DROP / ALTER / INSERT). Returns row_count for INSERT, otherwise
-    ok with no rows. Callers MUST set max_retries=0 to avoid double execution.
+  description: 'Tool Name: trino_ddl
+
+    Tool Arguments: {''sql'': {''description'': ''実行する DDL / INSERT / DROP など (単文のみ)。'', ''type'': ''str''}, ''catalog'':
+    {''description'': ''Trino カタログ名'', ''type'': ''str''}, ''schema_'': {''description'': None, ''type'': ''Union[str, NoneType]''}}
+
+    Tool Description: Execute a mutating Trino statement (CREATE / DROP / ALTER / INSERT). Returns row_count for INSERT, otherwise
+    ok with no rows. Callers MUST set max_retries=0 to avoid double execution.'
   requires_auth: true
   args_schema:
     properties:
@@ -459,8 +872,14 @@ tools:
     type: object
 - name: trino_meta
   class_path: thor.tools.trino.TrinoMetaTool
-  description: Return column definitions and (optionally) column statistics for an Iceberg/Trino table. Use before Text-to-SQL
-    to ground the model.
+  description: 'Tool Name: trino_meta
+
+    Tool Arguments: {''catalog'': {''description'': None, ''type'': ''str''}, ''schema_'': {''description'': None, ''type'':
+    ''str''}, ''table'': {''description'': None, ''type'': ''str''}, ''include_stats'': {''description'': ''SHOW STATS の結果を含める'',
+    ''type'': ''bool''}}
+
+    Tool Description: Return column definitions and (optionally) column statistics for an Iceberg/Trino table. Use before
+    Text-to-SQL to ground the model.'
   requires_auth: true
   args_schema:
     properties:
@@ -486,8 +905,14 @@ tools:
     type: object
 - name: trino_query
   class_path: thor.tools.trino.TrinoQueryTool
-  description: Execute a read-only Trino SQL statement (SELECT/SHOW/DESCRIBE/EXPLAIN) and return columns + rows. Mutations
-    are rejected here — use trino_ddl.
+  description: 'Tool Name: trino_query
+
+    Tool Arguments: {''sql'': {''description'': ''実行する SELECT / SHOW / DESCRIBE / EXPLAIN。'', ''type'': ''str''}, ''catalog'':
+    {''description'': ''Trino カタログ名'', ''type'': ''str''}, ''schema_'': {''description'': ''Trino スキーマ (省略可)'', ''type'':
+    ''Union[str, NoneType]''}, ''max_rows'': {''description'': ''返却する最大行数 (LIMIT 相当)'', ''type'': ''int''}}
+
+    Tool Description: Execute a read-only Trino SQL statement (SELECT/SHOW/DESCRIBE/EXPLAIN) and return columns + rows. Mutations
+    are rejected here — use trino_ddl.'
   requires_auth: true
   args_schema:
     properties:
@@ -520,7 +945,13 @@ tools:
     type: object
 - name: type_infer
   class_path: thor.tools.schema.TypeInferTool
-  description: Infer a Trino/Iceberg type for each column from sample values. Returns [{name, trino_type, nullable, sample_size}].
+  description: 'Tool Name: type_infer
+
+    Tool Arguments: {''columns'': {''description'': ''{column_name: [sample_value, ...]} 形式。空値は None として渡す。'', ''type'': ''dict[str,
+    list[Any]]''}, ''max_varchar'': {''description'': ''VARCHAR の上限長 (超える場合は VARCHAR without length)'', ''type'': ''int''}}
+
+    Tool Description: Infer a Trino/Iceberg type for each column from sample values. Returns [{name, trino_type, nullable,
+    sample_size}].'
   requires_auth: false
   args_schema:
     properties:
@@ -539,4 +970,73 @@ tools:
     required:
     - columns
     title: TypeInferArgs
+    type: object
+- name: viz_heuristic
+  class_path: thor.tools.viz.VizHeuristicTool
+  description: 'Tool Name: viz_heuristic
+
+    Tool Arguments: {''fq_table_name'': {''description'': None, ''type'': ''str''}, ''columns'': {''description'': None, ''type'':
+    ''list[_ColumnInput]''}, ''max_visuals'': {''description'': None, ''type'': ''int''}}
+
+    Tool Description: Given a table''s fq_table_name and its columns (with role/cardinality), propose 1-6 visualisations (line/bar/pie/kpi/table)
+    using deterministic rules. This tool does not call an LLM or hit any external service.'
+  requires_auth: false
+  args_schema:
+    $defs:
+      _ColumnInput:
+        description: VizHeuristicTool に渡すカラム 1 個分。
+        properties:
+          name:
+            title: Name
+            type: string
+          trino_type:
+            anyOf:
+            - type: string
+            - type: 'null'
+            default: null
+            title: Trino Type
+          role:
+            default: dimension
+            description: dimension | measure | time — TableInspectionResult と同じ規約
+            title: Role
+            type: string
+          distinct_count:
+            anyOf:
+            - minimum: 0
+              type: integer
+            - type: 'null'
+            default: null
+            title: Distinct Count
+          null_ratio:
+            anyOf:
+            - maximum: 1.0
+              minimum: 0.0
+              type: number
+            - type: 'null'
+            default: null
+            title: Null Ratio
+        required:
+        - name
+        title: _ColumnInput
+        type: object
+    properties:
+      fq_table_name:
+        title: Fq Table Name
+        type: string
+      columns:
+        items:
+          $ref: '#/$defs/_ColumnInput'
+        minItems: 1
+        title: Columns
+        type: array
+      max_visuals:
+        default: 6
+        maximum: 20
+        minimum: 1
+        title: Max Visuals
+        type: integer
+    required:
+    - fq_table_name
+    - columns
+    title: VizHeuristicArgs
     type: object

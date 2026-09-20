@@ -6,11 +6,67 @@ version: 1
 generated_from: thor.{router,ingestion,analytics}.crew
 crews:
 - name: router
-  implemented: false
+  implemented: true
   process: sequential
-  agents: []
-  tasks: []
-  todo: IntentClassifierAgent + DispatcherAgent を実装後、build_router_crew() を接続する。
+  memory: false
+  agents:
+  - intent_classifier
+  - dispatcher
+  tasks:
+  - name: intent_classification
+    agent: intent_classifier
+    description: '以下のユーザー発話を分類せよ。
+
+
+      USER PROMPT:
+
+      {prompt}
+
+
+      SESSION_ID: {session_id}
+
+
+      手順:
+
+      1) 発話に s3://<bucket>/<key> が含まれる、または『取り込み』『インジェスト』『テーブルにして』等の意図があれば intent=''INGEST'' とし、extracted_args に {{bucket,
+      key, target_schema}} を抽出する。target_schema が明示されていなければ ''demo'' を入れる。
+
+      2) 発話に『サマリー』『まとめて』『どんな傾向』等が含まれ、対象テーブルが明示されているか代名詞 (『そのテーブル』等) が使われていれば intent=''ANALYZE_SUMMARY''。代名詞は entity_memory_read
+      tool を呼んで last_table を引き当て、extracted_args.fq_table_name に埋める。
+
+      3) 発話に『ダッシュボード』『可視化』『グラフを作って』等が含まれれば intent=''ANALYZE_DASHBOARD''。同様に fq_table_name を entity_memory で解決する。
+
+      4) 挨拶・ヘルプ要求・意図不明な雑談は intent=''CHITCHAT''。
+
+      5) 上記いずれにも当てはまらないが情報が足りない場合は intent=''UNKNOWN'' とし、needs_clarification=true, clarification_prompt に日本語で追加質問を書く。
+
+
+      extracted_args に Knox JWT / STS / パスワード等の秘匿情報は絶対に含めない。confidence は 0.0-1.0 の float で自信度を入れる。'
+    expected_output: IntentClassification の JSON。intent, confidence, extracted_args, needs_clarification, clarification_prompt,
+      reasoning を含む。
+    output_model: IntentClassification
+    inputs:
+    - prompt
+    - session_id
+    context: []
+    max_retries: 1
+    guardrail: null
+  - name: dispatch_plan
+    agent: dispatcher
+    description: "前段の IntentClassification を、Python 側が実行できる DispatchPlan に変換せよ。\n\n変換ルール:\n  intent=INGEST            -> child_crew='ingestion',\
+      \ inputs={{bucket, key, target_schema}}, skip_child=false\n  intent=ANALYZE_SUMMARY   -> child_crew='analytics_summary',\
+      \ inputs={{fq_table_name, question}}, skip_child=false\n  intent=ANALYZE_DASHBOARD -> child_crew='analytics_dashboard',\
+      \ inputs={{fq_table_name, question}}, skip_child=false\n  intent=CHITCHAT          -> child_crew='none', skip_child=true,\
+      \ response_markdown に日本語で短い返答を書く\n  intent=UNKNOWN or needs_clarification=true -> child_crew='none', skip_child=true,\
+      \ response_markdown に clarification_prompt を書く\n\n重要: あなたは kickoff Tool を『使ってはいけない』。実際の子 Crew 起動は Python 側 (kickoff_router)\
+      \ が行う。あなたの仕事はDispatchPlan の JSON を返すことだけ。"
+    expected_output: DispatchPlan の JSON。intent, child_crew, inputs, response_markdown, skip_child を含む。
+    output_model: DispatchPlan
+    inputs: []
+    context:
+    - intent_classification
+    max_retries: 1
+    guardrail: null
 - name: ingestion
   implemented: true
   process: sequential
@@ -130,9 +186,120 @@ crews:
     - draft_ossie
     max_retries: 1
     guardrail: null
-- name: analytics
-  implemented: false
-  process: hierarchical
-  agents: []
-  tasks: []
-  todo: TableInspector / Text2SQL / VizPlanner / DashboardBuilder / SummaryWriter を実装後接続する。
+- name: analytics_summary
+  implemented: true
+  process: sequential
+  memory: false
+  agents:
+  - table_inspector
+  - summary_writer
+  tasks:
+  - name: table_inspection
+    agent: table_inspector
+    description: '対象テーブル fq_table_name={fq_table_name} を調査せよ。以下の順で必ず実行する: (a) fq_table_name を catalog / schema / table にパースする
+      (3 セグメント想定、''iceberg.demo.sales_2024'' → catalog=''iceberg'', schema=''demo'', table=''sales_2024'')。(b) trino_meta
+      で columns と SHOW STATS を取る。  権限不足なら error_code=PERM_SELECT_DENIED、  テーブル未存在なら error_code=TRINO_TABLE_NOT_FOUND を返し、  それ以外のフィールドは空/None
+      で構わない。(c) ossie_read で fq_name={fq_table_name} を読み、  存在すれば description / dimensions / measures を取り出す   (無くても error にせず、ossie_yaml_path=None
+      で継続する)。(d) trino_query で ''SELECT * FROM {fq_table_name} LIMIT 20'' を実行し、  sample_rows に詰める。0 行でも error にはしない。(e) 各カラムの
+      role は Ossie に一致名があればそれを、  無ければ trino_type から ''measure'' (数値系) / ''time'' (date/timestamp) /   ''dimension'' (それ以外)
+      を選ぶ。'
+    expected_output: TableInspectionResult の JSON。fq_table_name, catalog, schema, table, exists, has_select_priv, error_code,
+      message, columns (name/trino_type/nullable/null_ratio/distinct_count/low_value/high_value/role), row_count_estimate,
+      ossie_yaml_path, ossie_description, ossie_dimensions, ossie_measures, sample_rows を含む。
+    output_model: TableInspectionResult
+    inputs:
+    - fq_table_name
+    context: []
+    max_retries: 1
+    guardrail: thor.analytics.tasks.inspect_table_guardrail
+  - name: summary
+    agent: summary_writer
+    description: '前タスクの TableInspectionResult を踏まえ、日本語 Markdown で テーブル内容を 5-15 行程度に要約せよ。含めるべき観点 (それぞれ 1-3 行):   1. 全体像 (行数目安・カラム数・主な
+      dimension と measure)。     row_count_estimate が None のときは「統計未収集」と明示。  2. 分布 (distinct_count が小さい dimension は代表値を列挙、     数値カラムは
+      low_value / high_value を提示)。  3. データ品質 (null_ratio が 0.2 以上のカラムは列挙、     sample_rows が空なら「サンプル取得 0 行」と警告)。  4. Ossie
+      に description があればそれを冒頭に置き、     無ければ「セマンティックレイヤ未整備」と 1 行で触れる。  5. 個人情報が疑われるカラム名 (email/phone/address/name 等) は      具体値を書かず
+      warnings に回す。最後に sample_queries として ''question (日本語) と sql (Trino SELECT)'' の組を 2-3 件提案。SQL は fq_table_name={fq_table_name}
+      を使い、破壊系 (INSERT/UPDATE/DELETE/CREATE/DROP) は絶対に含めない。'
+    expected_output: SummaryReport の JSON。fq_table_name, summary_markdown, observations (category/headline/detail), warnings,
+      sample_queries ([{question, sql}]) を含む。
+    output_model: SummaryReport
+    inputs:
+    - fq_table_name
+    context:
+    - table_inspection
+    max_retries: 1
+    guardrail: null
+- name: analytics_dashboard
+  implemented: true
+  process: sequential
+  memory: false
+  agents:
+  - table_inspector
+  - viz_planner
+  - dashboard_builder
+  tasks:
+  - name: table_inspection
+    agent: table_inspector
+    description: '対象テーブル fq_table_name={fq_table_name} を調査せよ。以下の順で必ず実行する: (a) fq_table_name を catalog / schema / table にパースする
+      (3 セグメント想定、''iceberg.demo.sales_2024'' → catalog=''iceberg'', schema=''demo'', table=''sales_2024'')。(b) trino_meta
+      で columns と SHOW STATS を取る。  権限不足なら error_code=PERM_SELECT_DENIED、  テーブル未存在なら error_code=TRINO_TABLE_NOT_FOUND を返し、  それ以外のフィールドは空/None
+      で構わない。(c) ossie_read で fq_name={fq_table_name} を読み、  存在すれば description / dimensions / measures を取り出す   (無くても error にせず、ossie_yaml_path=None
+      で継続する)。(d) trino_query で ''SELECT * FROM {fq_table_name} LIMIT 20'' を実行し、  sample_rows に詰める。0 行でも error にはしない。(e) 各カラムの
+      role は Ossie に一致名があればそれを、  無ければ trino_type から ''measure'' (数値系) / ''time'' (date/timestamp) /   ''dimension'' (それ以外)
+      を選ぶ。'
+    expected_output: TableInspectionResult の JSON。fq_table_name, catalog, schema, table, exists, has_select_priv, error_code,
+      message, columns (name/trino_type/nullable/null_ratio/distinct_count/low_value/high_value/role), row_count_estimate,
+      ossie_yaml_path, ossie_description, ossie_dimensions, ossie_measures, sample_rows を含む。
+    output_model: TableInspectionResult
+    inputs:
+    - fq_table_name
+    context: []
+    max_retries: 1
+    guardrail: thor.analytics.tasks.inspect_table_guardrail
+  - name: viz_plan
+    agent: viz_planner
+    description: '前タスクの TableInspectionResult のカラム情報から、以下の手順でダッシュボード構成 (VizPlan) を作れ: (a) viz_heuristic に fq_table_name と
+      columns   (name / trino_type / role / distinct_count / null_ratio) を渡し、  最大 6 個の Visual 候補を得る。(b) ossie_read で fq_name={fq_table_name}
+      を読み、  存在すれば description / sample_queries を参照する。(c) 候補のうち意味の薄いもの (低カーディナリティ dim × 別 dim など)   を落として 3-5 個に絞り、各 Visual
+      の name を日本語に整える   (例: ''revenue の推移'' → ''月次売上の推移'')。(d) title は ''このテーブルは何のダッシュボードか'' が伝わる短い日本語に。破壊系のカラム操作は絶対に含めず、SELECT
+      / 集計に限定する。'
+    expected_output: VizPlan の JSON。fq_table_name, title, visuals ([{name, viz_type, x, y, aggregation, group_by, description}])
+      を含む。visuals は最低 1 個。
+    output_model: VizPlan
+    inputs:
+    - fq_table_name
+    context:
+    - table_inspection
+    max_retries: 1
+    guardrail: null
+  - name: cdv_startup
+    agent: dashboard_builder
+    description: 'cdv_startup_check を 1 回だけ呼び、Cloudera Data Visualization が起動しているか確認せよ。返り値をそのまま CDVStartupResult として出力する:  running=true
+      なら次のタスク (build_dashboard) へ進める。  running=false なら error_code=CDV_NOT_RUNNING と、ユーザーへの  案内 (Workbench の Data メニューから CDV
+      を初回起動して欲しい旨) を  message に載せる。起動していれば endpoint と version をそのまま埋める。'
+    expected_output: CDVStartupResult の JSON。running, endpoint, version, message, error_code を含む。
+    output_model: CDVStartupResult
+    inputs: []
+    context:
+    - table_inspection
+    max_retries: 1
+    guardrail: thor.analytics.tasks.ensure_cdv_running_guardrail
+  - name: build_dashboard
+    agent: dashboard_builder
+    description: 'VizPlan と TableInspectionResult を使い、Cloudera Data Visualizationに対して以下を順に実行せよ: (a) cdv_dataset_create_or_get
+      に fq_table_name を渡して  Dataset を確保する (既存なら再利用)。dataset_id と   dataset_reused (created の否定) を控えておく。(b) VizPlan.visuals
+      の各 visual について cdv_visual_create を呼び、  visual_id を集める。  - viz_type=line/bar: x と y は必須。  - viz_type=kpi: y (measure)
+      必須、x は None。  - viz_type=pie: x 必須、y は不要 (aggregation=count)。  - viz_type=table: x/y ともに不要。  1 個失敗しても他は続行、失敗内容は notes
+      に列挙する。(c) cdv_dashboard_create に title=VizPlan.title と   visual_ids (成功分) を渡し、dashboard_id と dashboard_url を得る。(d) 最終出力
+      BuildDashboardResult に   fq_table_name / title / dashboard_id / dashboard_url /   dataset_id / dataset_reused / visual_ids
+      / notes を詰める。同じダッシュボードを二重に作らないこと (このタスクは max_retries=0)。'
+    expected_output: BuildDashboardResult の JSON。fq_table_name, title, dashboard_id, dashboard_url, dataset_id, dataset_reused,
+      visual_ids, notes を含む。
+    output_model: BuildDashboardResult
+    inputs: []
+    context:
+    - table_inspection
+    - viz_plan
+    - cdv_startup
+    max_retries: 0
+    guardrail: null

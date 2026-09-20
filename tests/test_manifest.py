@@ -57,7 +57,8 @@ def test_tools_have_json_schema_args() -> None:
 def test_tools_class_path_is_importable_looking() -> None:
     m = build_tools_manifest()
     for t in m["tools"]:
-        assert t["class_path"].startswith("thor.tools."), t["name"]
+        assert t["class_path"].startswith("thor."), t["name"]
+        assert "." in t["class_path"], t["name"]
 
 
 # ------------------------------------------------------------------ #
@@ -157,14 +158,19 @@ def test_task_inputs_scanned_from_template_vars() -> None:
     assert "target_schema" in by_name["propose_schema_and_name"]["inputs"]
 
 
-def test_stub_crews_are_placeholders() -> None:
+def test_all_registered_crews_are_implemented() -> None:
     m = build_crews_manifest()
-    for name in ("router", "analytics"):
-        entry = next(c for c in m["crews"] if c["name"] == name)
-        assert entry["implemented"] is False
-        assert entry["agents"] == []
-        assert entry["tasks"] == []
-        assert entry.get("todo")
+    names = {c["name"] for c in m["crews"]}
+    assert names == {
+        "router",
+        "ingestion",
+        "analytics_summary",
+        "analytics_dashboard",
+    }
+    for entry in m["crews"]:
+        assert entry["implemented"] is True, entry["name"]
+        assert entry["agents"], entry["name"]
+        assert entry["tasks"], entry["name"]
 
 
 # ------------------------------------------------------------------ #

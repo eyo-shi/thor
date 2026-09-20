@@ -12,7 +12,7 @@ Model C ハイブリッド方針:
   * :func:`build_tools_manifest`  -- :mod:`thor.tools` の公開 Tool 全てを
     JSON Schema 付きで列挙。
   * :func:`build_agents_manifest` -- 各 Crew の Agent (role/goal/backstory/tools)
-    を列挙。Router / Analytics は未実装なので空エントリを予約。
+    を列挙。
   * :func:`build_crews_manifest`  -- 3 Crew の process / agents / tasks
     (context 依存関係を task 名に解決した形) を列挙。
 
