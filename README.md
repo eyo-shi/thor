@@ -135,7 +135,7 @@ CDV 未設定でも取り込み・サマリーはそのまま動作する。ダ�
 ### 反映方法
 
 いずれの env も Project → Settings → Advanced → Environment Variables で追加した後、
-同画面の **Application (Thor API + UI) を Restart** することで反映される。
+同画面の **Application (Thor) を Restart** することで反映される。
 
 ## ライセンス
 

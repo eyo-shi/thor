@@ -114,7 +114,7 @@ tasks:
 
   # 5. Thor API を Workbench Application として起動 (Knox パススルーで公開)
   - type: start_application
-    name: Thor API + UI
+    name: Thor
     entity_label: thor-api
     subdomain: thor
     static_subdomain: true

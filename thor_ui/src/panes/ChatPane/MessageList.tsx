@@ -20,12 +20,7 @@ export function MessageList() {
   if (messages.length === 0) {
     return (
       <div className="chat-empty">
-        <p>Ask Thor…</p>
-        <ul>
-          <li>「s3://demo-bucket/... を取り込んで」</li>
-          <li>「そのテーブルのサマリーを作って」</li>
-          <li>「ダッシュボードを作って」</li>
-        </ul>
+        <p>入力欄から Thor に指示を送れます。</p>
       </div>
     );
   }

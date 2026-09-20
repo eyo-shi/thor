@@ -23,9 +23,14 @@ export function ResultPane() {
           <div className="welcome">
             <h2>ようこそ Thor へ</h2>
             <p>
-              左のツリーからテーブルや S3
-              オブジェクトを選ぶか、右のチャットで指示してください。
+              左の Explorer からテーブルや S3 オブジェクトを選ぶか、右の
+              Assistant に自然言語で指示してください。
             </p>
+            <ul className="welcome__hints">
+              <li>「s3://demo-bucket/... を取り込んで」</li>
+              <li>「そのテーブルのサマリーを作って」</li>
+              <li>「ダッシュボードを作って」</li>
+            </ul>
           </div>
         )}
         {active && <TabRenderer tabId={active.id} />}

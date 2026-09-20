@@ -21,10 +21,11 @@ export function ChatPane() {
   const setSetupError = useChatStore((s) => s.setSetupError);
   return (
     <div className="chat-pane">
-      <div className="pane-header">
-        <span>Chat</span>
+      <div className="pane-header pane-header--chat">
+        <span className="pane-header__title">Assistant</span>
+        <span className="pane-header__hint">自然言語でデータ操作を依頼</span>
       </div>
-      <div className="pane-body chat-body">
+      <div className="chat-scroll">
         <MessageList />
         <StepIndicator />
         {setupError && (

@@ -32,32 +32,41 @@ export function PromptInput({ wish }: Props) {
   }
 
   return (
-    <div className="pane-footer chat-footer">
-      <textarea
-        placeholder="prompt (Ctrl/⌘+Enter で送信)"
-        value={text}
-        disabled={streaming}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-            e.preventDefault();
-            void submit();
-          }
-        }}
-      />
-      {streaming ? (
-        <button className="btn-cancel" onClick={() => wish.cancel()}>
-          Cancel
-        </button>
-      ) : (
-        <button
-          className="btn-send"
-          onClick={() => void submit()}
-          disabled={!text.trim()}
-        >
-          Send ▶
-        </button>
-      )}
+    <div className="chat-composer">
+      <div className="chat-composer__inner">
+        <textarea
+          className="chat-composer__input"
+          placeholder="Thor に質問する… (Ctrl/⌘ + Enter で送信)"
+          rows={1}
+          value={text}
+          disabled={streaming}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+              e.preventDefault();
+              void submit();
+            }
+          }}
+        />
+        {streaming ? (
+          <button
+            type="button"
+            className="chat-composer__btn chat-composer__btn--cancel"
+            onClick={() => wish.cancel()}
+          >
+            停止
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="chat-composer__btn chat-composer__btn--send"
+            onClick={() => void submit()}
+            disabled={!text.trim()}
+          >
+            送信
+          </button>
+        )}
+      </div>
     </div>
   );
 }

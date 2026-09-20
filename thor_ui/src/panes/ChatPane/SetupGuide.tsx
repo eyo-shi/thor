@@ -49,7 +49,7 @@ function guideFor(errorCode: string): GuideDetails {
         ],
         extraSteps: [
           "Project → Settings → Advanced → Environment Variables に上記を追加",
-          "同ページから Application (Thor API + UI) を Restart",
+          "同ページから Application (Thor) を Restart",
         ],
       };
     case "TRINO_NOT_CONFIGURED":
