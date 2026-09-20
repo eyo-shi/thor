@@ -411,3 +411,15 @@ def test_uvicorn_log_level_treats_empty_env_as_info(
     assert _uvicorn_log_level() == "info"
     monkeypatch.setenv("THOR_LOG_LEVEL", "WARNING")
     assert _uvicorn_log_level() == "warning"
+
+
+def test_running_inside_event_loop_detects_active_loop() -> None:
+    import asyncio
+
+    from thor.api.main import _running_inside_event_loop
+
+    async def _check() -> None:
+        assert _running_inside_event_loop() is True
+
+    asyncio.run(_check())
+    assert _running_inside_event_loop() is False

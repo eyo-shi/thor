@@ -25,7 +25,7 @@ def _normalize_deploy_env() -> None:
 
 _normalize_deploy_env()
 
-from thor.api.main import app, main  # noqa: E402
+from thor.api.main import app, serve  # noqa: E402
 
 if __name__ == "__main__":
-    main()
+    serve()

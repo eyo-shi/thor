@@ -205,11 +205,10 @@ def _mount_placeholder(app: FastAPI, static_dir: Path, logger: Any) -> None:
 app = create_app()
 
 
-def main() -> None:
-    """uvicorn 起動関数 (pyproject の [project.scripts] からも呼ばれる)。"""
+def _uvicorn_config() -> Any:
+    """uvicorn Config を組み立てる (テスト / serve 共通)。"""
     import uvicorn
 
-    # Workbench Application は CDSW_APP_PORT を割り当てる
     port_env = os.environ.get("CDSW_APP_PORT") or os.environ.get(
         "THOR_API_PORT", "8080"
     )
@@ -218,18 +217,62 @@ def main() -> None:
     except ValueError:
         port = 8080
 
-    host = _env_non_empty("THOR_API_HOST", "0.0.0.0")
-    log_level = _uvicorn_log_level()
-
-    # import 文字列ではなく app オブジェクトを渡す (Workbench kernel exec 向け)
-    uvicorn.run(
+    return uvicorn.Config(
         app,
-        host=host,
+        host=_env_non_empty("THOR_API_HOST", "0.0.0.0"),
         port=port,
-        log_level=log_level,
+        log_level=_uvicorn_log_level(),
         proxy_headers=True,
         forwarded_allow_ips="*",
     )
+
+
+def _running_inside_event_loop() -> bool:
+    """Jupyter / Workbench kernel exec など、既存 loop 上かどうか。"""
+    import asyncio
+
+    try:
+        asyncio.get_running_loop()
+        return True
+    except RuntimeError:
+        return False
+
+
+def serve() -> None:
+    """FastAPI アプリを uvicorn で blocking 起動する。
+
+    Workbench Application は Jupyter kernel 内でスクリプトを exec するため、
+    既存 event loop 上では ``uvicorn.run()`` が
+    ``asyncio.run() cannot be called from a running event loop`` で落ちる。
+    その場合は別スレッドで Server.run() する。
+    """
+    import threading
+
+    import uvicorn
+
+    config = _uvicorn_config()
+    logger = get_logger("thor.api")
+
+    def _run_server() -> None:
+        uvicorn.Server(config).run()
+
+    if _running_inside_event_loop():
+        logger.info("thor.api.serve_in_thread", reason="running_event_loop")
+        thread = threading.Thread(
+            target=_run_server,
+            name="thor-uvicorn",
+            daemon=False,
+        )
+        thread.start()
+        thread.join()
+        return
+
+    _run_server()
+
+
+def main() -> None:
+    """uvicorn 起動関数 (pyproject の [project.scripts] からも呼ばれる)。"""
+    serve()
 
 
 if __name__ == "__main__":
