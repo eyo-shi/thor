@@ -37,7 +37,33 @@ from thor.api.routes import (
 )
 from thor.transport.logging import configure_logging, get_logger
 
-_STATIC_DIR = Path(__file__).parent / "static"
+
+def _resolve_static_dir() -> Path:
+    """``thor/api/static`` のパスを解決する。
+
+    Workbench Application (Jupyter kernel exec) では ``__file__`` が無いことが
+    あるため、env / パッケージ位置 / cwd でフォールバックする。
+    """
+    try:
+        return Path(__file__).resolve().parent / "static"
+    except NameError:
+        pass
+
+    for key in ("CDSW_PROJECT_DIR", "CML_PROJECT_DIR"):
+        root = os.environ.get(key)
+        if root:
+            return Path(root).resolve() / "thor" / "api" / "static"
+
+    try:
+        import inspect
+
+        import thor.api as api_pkg
+
+        return Path(inspect.getfile(api_pkg)).resolve().parent / "static"
+    except Exception:
+        pass
+
+    return Path.cwd().resolve() / "thor" / "api" / "static"
 
 
 def create_app() -> FastAPI:
@@ -79,15 +105,16 @@ def create_app() -> FastAPI:
 
     # SPA (React + Vite ビルド成果物) を / から配信する。
     # ビルド前 / 開発モード用に static/ が無くても起動できるようにする。
-    if _STATIC_DIR.is_dir() and any(_STATIC_DIR.iterdir()):
-        _mount_spa(app, _STATIC_DIR, logger)
+    static_dir = _resolve_static_dir()
+    if static_dir.is_dir() and any(static_dir.iterdir()):
+        _mount_spa(app, static_dir, logger)
     else:
-        _mount_placeholder(app, logger)
+        _mount_placeholder(app, static_dir, logger)
 
     logger.info(
         "thor.api.ready",
-        static_dir=str(_STATIC_DIR),
-        static_present=_STATIC_DIR.is_dir(),
+        static_dir=str(static_dir),
+        static_present=static_dir.is_dir(),
     )
     return app
 
@@ -131,9 +158,9 @@ def _mount_spa(app: FastAPI, static_dir: Path, logger: Any) -> None:
     logger.info("thor.api.spa_mounted", static_dir=str(static_dir))
 
 
-def _mount_placeholder(app: FastAPI, logger: Any) -> None:
+def _mount_placeholder(app: FastAPI, static_dir: Path, logger: Any) -> None:
     """静的ビルドが無いときのプレースホルダ画面。"""
-    logger.warning("thor.api.spa_absent", static_dir=str(_STATIC_DIR))
+    logger.warning("thor.api.spa_absent", static_dir=str(static_dir))
 
     @app.get("/", include_in_schema=False)
     async def _placeholder() -> JSONResponse:
