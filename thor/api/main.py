@@ -66,6 +66,28 @@ def _resolve_static_dir() -> Path:
     return Path.cwd().resolve() / "thor" / "api" / "static"
 
 
+_UVICORN_LOG_LEVELS = frozenset(
+    {"critical", "error", "warning", "info", "debug", "trace"}
+)
+
+
+def _env_non_empty(key: str, default: str) -> str:
+    """環境変数が未設定または空文字のとき default を返す。
+
+    Workbench の AMP フォームで optional env を空のまま送ると、
+    ``os.environ.get(key, default)`` では default にならない (キーは存在する)。
+    """
+    val = os.environ.get(key)
+    if val is None or not str(val).strip():
+        return default
+    return str(val).strip()
+
+
+def _uvicorn_log_level() -> str:
+    level = _env_non_empty("THOR_LOG_LEVEL", "info").lower()
+    return level if level in _UVICORN_LOG_LEVELS else "info"
+
+
 def create_app() -> FastAPI:
     """FastAPI アプリを組み立てる。テストからも呼ぶ想定。"""
     configure_logging()
@@ -196,11 +218,12 @@ def main() -> None:
     except ValueError:
         port = 8080
 
-    host = os.environ.get("THOR_API_HOST", "0.0.0.0")
-    log_level = os.environ.get("THOR_LOG_LEVEL", "info").lower()
+    host = _env_non_empty("THOR_API_HOST", "0.0.0.0")
+    log_level = _uvicorn_log_level()
 
+    # import 文字列ではなく app オブジェクトを渡す (Workbench kernel exec 向け)
     uvicorn.run(
-        "thor.api.main:app",
+        app,
         host=host,
         port=port,
         log_level=log_level,

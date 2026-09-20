@@ -117,7 +117,7 @@ tasks:
     name: Thor API + UI
     subdomain: thor
     static_subdomain: true
-    script: thor/api/main.py
+    script: amp/05_start_application.py
     short_summary: FastAPI + SPA を Workbench Application として起動
     long_summary: >-
       thor.api.main:app を uvicorn で起動する。ポートは Workbench が割り当てる

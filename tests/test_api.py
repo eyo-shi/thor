@@ -400,3 +400,14 @@ def test_files_preview_s3_not_found(client: TestClient) -> None:
         )
     assert r.status_code == 502
     assert r.json()["detail"]["error_code"] == "S3_NOT_FOUND"
+
+
+def test_uvicorn_log_level_treats_empty_env_as_info(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from thor.api.main import _uvicorn_log_level
+
+    monkeypatch.setenv("THOR_LOG_LEVEL", "")
+    assert _uvicorn_log_level() == "info"
+    monkeypatch.setenv("THOR_LOG_LEVEL", "WARNING")
+    assert _uvicorn_log_level() == "warning"
