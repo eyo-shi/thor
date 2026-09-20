@@ -7,7 +7,7 @@ Cloudera AI Workbench の AMP カタログから 1 クリックで Thor を起�
 | # | Script | 内容 |
 |---|---|---|
 | 1 | `01_install_python_deps.py` | `pip install -e .[dev]` で thor パッケージを editable install |
-| 2 | `02_build_ui.py` | `npm ci && npm run build` で `thor_ui/` をビルド → `thor/api/static/` |
+| 2 | `02_build_ui.py` | nvm で Node.js 20 を自動導入 → `npm ci` / `npm run build` → `thor/api/static/` |
 | 3 | `03_seed_semantic.py` | `semantic/{datasets,metrics,...}` を用意し、Git 初期化 (既存 repo は no-op) |
 | 4 | `04_verify_manifest.py` | `python -m thor.manifest --check` で Python ⇄ YAML drift を検出 |
 | 5 | (start_application) | `thor/api/main.py` を Workbench Application として起動 |

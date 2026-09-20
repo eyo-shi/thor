@@ -67,12 +67,15 @@ uvicorn thor.api.main:app --reload   # http://127.0.0.1:8000
 
 ```bash
 cd thor_ui
-npm ci
+npm ci             # package-lock.json 必須 (リポジトリ同梱)
 npm run dev        # http://localhost:5173  (API は /api を 127.0.0.1:8000 にプロキシ)
 npm run build      # thor/api/static/ に SPA を出力
 ```
 
 ### Cloudera AI Workbench で配信
+
+AMP Deploy では Step 2 が nvm + `npm ci && npm run build` を自動実行する。
+手動ビルドする場合のみ:
 
 1. `cd thor_ui && npm ci && npm run build`
 2. Workbench Application として `python -m thor.api.main` を起動 (`CDSW_APP_PORT` を uvicorn に渡す)

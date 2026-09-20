@@ -77,10 +77,11 @@ tasks:
   - type: run_session
     name: Build Thor UI (React + Vite)
     script: amp/02_build_ui.py
-    short_summary: npm ci && npm run build で 3 ペイン UI をビルド
+    short_summary: nvm + npm ci/build で 3 ペイン UI をビルド
     long_summary: >-
-      thor_ui/ (React + TypeScript + Vite) の依存をインストールし、本番ビルドを
-      thor/api/static/ に出す。FastAPI が SPA として / から配信する。
+      Workbench runtime に Node.js が無い場合はユーザー領域へ nvm + Node 20 を
+      自動導入する。thor_ui/ (React + TypeScript + Vite) を npm ci で依存固定し、
+      本番ビルドを thor/api/static/ に出す。FastAPI が SPA として / から配信する。
     kernel: python3
     cpu: 2
     memory: 4

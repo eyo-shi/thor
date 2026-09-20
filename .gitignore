@@ -23,6 +23,9 @@ thor_ui/dist/
 thor_ui/.vite/
 thor_ui/*.log
 thor_ui/.eslintcache
+thor_ui/*.tsbuildinfo
+thor_ui/vite.config.js
+thor_ui/vite.config.d.ts
 
 # Vite ビルド成果物の出力先 (成果物は Git 管理しない)
 thor/api/static/
