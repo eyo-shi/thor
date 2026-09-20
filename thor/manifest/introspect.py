@@ -67,7 +67,7 @@ def _agent_name_from_role(agent: Any) -> str:
 
 def _tool_names_from_agent(agent: Any) -> list[str]:
     """Agent が持つ tools リストから Tool 名 (str) を取り出す。"""
-    tools = getattr(agent, "tools", None) or []
+    tools = _as_sequence(getattr(agent, "tools", None))
     names: list[str] = []
     for t in tools:
         n = getattr(t, "name", None)
@@ -86,9 +86,21 @@ def _extract_input_vars(description: str) -> list[str]:
     return list(seen.keys())
 
 
+def _as_sequence(value: Any) -> list[Any]:
+    """CrewAI Task / Agent の list 属性を正規化する。
+
+    crewai>=0.20 では未指定フィールドが ``_NotSpecified`` sentinel になる。
+    ``getattr(task, "context", None) or []`` では truthy な sentinel が残り、
+    イテレーションで TypeError になるため、list / tuple のみ受け付ける。
+    """
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    return []
+
+
 def _resolve_context_names(task: Any, task_id_to_name: dict[int, str]) -> list[str]:
     """Task の ``context`` (Task インスタンスのリスト) を Task 名の str リストにする。"""
-    ctx = getattr(task, "context", None) or []
+    ctx = _as_sequence(getattr(task, "context", None))
     out: list[str] = []
     for c in ctx:
         name = task_id_to_name.get(id(c))
@@ -217,7 +229,7 @@ def build_agents_manifest() -> dict[str, Any]:
         if not entry["implemented"] or entry["factory"] is None:
             continue
         crew = entry["factory"]()
-        for agent in getattr(crew, "agents", []) or []:
+        for agent in _as_sequence(getattr(crew, "agents", None)):
             agents_out.append(_agent_to_dict(agent, crew_name))
     return {
         "version": 1,
@@ -276,7 +288,7 @@ def _crew_to_dict(entry: dict[str, Any]) -> dict[str, Any]:
     crew = entry["factory"]()
 
     # Task 名の id -> name 辞書を先に組む (context の逆引きに必要)
-    tasks = list(getattr(crew, "tasks", []) or [])
+    tasks = _as_sequence(getattr(crew, "tasks", None))
     task_id_to_name: dict[int, str] = {}
     for t in tasks:
         n = _task_name_from_output(t)
