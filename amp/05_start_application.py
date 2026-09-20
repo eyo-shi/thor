@@ -1,11 +1,12 @@
 """Workbench Application 起動エントリ (AMP Step 5)。
 
-``start_application`` は run_session と同様に Jupyter kernel exec される
-ことがある。optional env が空文字で渡されるケースを正規化してから
-:mod:`thor.api.main` を import / 起動する。
+``start_application`` は Jupyter kernel 内で本スクリプトを exec し、
+定義された ``app`` (FastAPI) を **Workbench 側が CDSW_APP_PORT で配信**する。
+ここで uvicorn を二重起動すると ``address already in use`` になるため、
+``TASK_TYPE=START_APPLICATION`` のときは ``serve()`` を呼ばない。
 
-* ``app`` — Workbench が FastAPI アプリを参照する場合に備える
-* ``main()`` — スクリプトとして実行されたとき uvicorn を起動
+ローカル開発で ``python amp/05_start_application.py`` するときだけ
+自前で uvicorn を起動する。
 """
 from __future__ import annotations
 
@@ -23,9 +24,33 @@ def _normalize_deploy_env() -> None:
             os.environ[key] = default
 
 
+def _workbench_serves_app() -> bool:
+    """Workbench Application ランタイムが app を配信するか。"""
+    if os.environ.get("TASK_TYPE") == "START_APPLICATION":
+        return True
+    # kernel exec + APP ポート割当済み → プラットフォーム側が bind 済み
+    if os.environ.get("CDSW_APP_PORT"):
+        try:
+            import asyncio
+
+            asyncio.get_running_loop()
+            return True
+        except RuntimeError:
+            pass
+    return False
+
+
 _normalize_deploy_env()
 
 from thor.api.main import app, serve  # noqa: E402
 
 if __name__ == "__main__":
-    serve()
+    if _workbench_serves_app():
+        port = os.environ.get("CDSW_APP_PORT", "?")
+        print(
+            f"[amp:05] Workbench serves `app` on CDSW_APP_PORT={port} "
+            "— skipping self-hosted uvicorn",
+            flush=True,
+        )
+    else:
+        serve()
