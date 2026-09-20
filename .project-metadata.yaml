@@ -22,11 +22,11 @@ specification_version: 1.0
 prototype_version: 0.0.1
 
 # ---------------------------------------------------------------------------
-# Runtime (Python 3.11)
+# Runtime (Python 3.12)
 # ---------------------------------------------------------------------------
 runtimes:
   - editor: PBJ Workbench
-    kernel: Python 3.11
+    kernel: Python 3.12
     edition: Standard
 
 # ---------------------------------------------------------------------------

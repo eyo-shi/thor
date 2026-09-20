@@ -55,6 +55,8 @@ MVP 実装完了。以下の全レイヤが `main` に入っている:
 
 ### バックエンド
 
+Python **3.12** 以上が必要です。
+
 ```bash
 python -m venv .venv
 source .venv/bin/activate

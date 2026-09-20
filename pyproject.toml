@@ -7,7 +7,7 @@ name = "thor"
 version = "0.0.1"
 description = "Cloudera AI Agent Studio 上で動作する Databricks Genie 相当のマルチエージェント (Router + Ingestion + Analytics) と、React + FastAPI ベースの 3 ペイン UI。"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 license = { text = "Apache-2.0" }
 authors = [{ name = "Cloudera" }]
 
@@ -61,7 +61,7 @@ packages = ["thor"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "N", "SIM"]
@@ -73,6 +73,6 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = false
 ignore_missing_imports = true
