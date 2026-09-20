@@ -1,66 +1,20 @@
 name: Thor
 description: |
   Cloudera AI Agent Studio 上で動くマルチエージェント。自然言語で S3 → Iceberg
-  取り込み / Data サマリー生成 / Cloudera Data Visualization ダッシュボード作成を
-  一気通貫に行う。3 ペイン Web UI (React + Vite) と FastAPI バックエンドを
+  取り込み / テーブルサマリー生成 / Cloudera Data Visualization ダッシュボード
+  作成を一気通貫に行う。3 ペイン Web UI (React + Vite) と FastAPI バックエンドを
   Cloudera AI Workbench Application として配信し、Trino / CDV / S3 は Knox JWT +
   IDBroker によるエンドユーザー権限で操作する。セマンティックレイヤは Apache
   Ossie の YAML を Git 管理する。
 
-  ─────────────────────────────────────────────────────────────────
-  Deploy 後の設定手順 (Post-Deploy Configuration)
-  ─────────────────────────────────────────────────────────────────
-  AMP Deploy 時に必要な入力は極力ゼロにしてある。以下は Deploy 完了後に
-  **Project → Settings → Advanced → Environment Variables** で設定し、
-  同画面から Application を再起動して反映する運用となる。
+  Deploy 時に必要な入力は Optional な THOR_LOG_LEVEL / THOR_DEMO_MODE の 2 個
+  のみ。LLM プロバイダ (cai / anthropic / openai / bedrock 選択式)、Trino / S3
+  接続 (Data Connections を優先)、Cloudera Data Visualization は Deploy 完了後に
+  Project → Settings → Advanced → Environment Variables で設定し、Application を
+  再起動して反映する。未設定のまま UI で該当機能を叩くと API は HTTP 503 +
+  guided JSON を返し、SetupGuide カードが手順を表示する。
 
-  1. Trino / CDW への接続
-     - Site Administration → Data Connections で CDW / Trino connection を
-       登録済みなら、`THOR_TRINO_CONNECTION_NAME` にその connection 名を
-       設定する (未設定でも Trino タイプの connection が 1 個なら自動採用)。
-     - Data Connections を使わない環境では以下 4 個の env を代わりに設定:
-       `THOR_TRINO_HOST`, `THOR_TRINO_PORT` (default 443),
-       `THOR_TRINO_CATALOG` (default iceberg), `THOR_TRINO_SCHEMA` (default demo)。
-
-  2. S3 への接続
-     - Site Administration → Data Connections で S3 connection を登録済みなら、
-       `THOR_S3_CONNECTION_NAME` を設定する (省略時は S3 タイプの最初の
-       connection を自動採用)。
-     - Data Connections を使わない環境では `THOR_AWS_REGION` (default us-east-1)。
-     - 認証情報は IDBroker STS 経由でユーザー単位に払い出されるため、AMP には
-       AWS access key / secret は一切保持しない。
-
-  3. LLM プロバイダ (以下いずれか 1 プロバイダを選択)
-     - `THOR_LLM_PROVIDER=cai` (default): Cloudera AI Inference。
-         必要 env: `CAI_INFERENCE_BASE_URL`, `CAI_INFERENCE_API_KEY`。
-         任意 env: `THOR_LLM_ROUTER_MODEL` (default llama-3-8b-instruct),
-                  `THOR_LLM_ANALYTICS_MODEL` (default llama-3-70b-instruct)。
-     - `THOR_LLM_PROVIDER=anthropic`: Anthropic API。
-         必要 env: `ANTHROPIC_API_KEY`。
-         任意 env: `ANTHROPIC_BASE_URL`,
-                  `THOR_LLM_ROUTER_MODEL` (default claude-3-5-haiku-latest),
-                  `THOR_LLM_ANALYTICS_MODEL` (default claude-3-5-sonnet-latest)。
-     - `THOR_LLM_PROVIDER=openai`: OpenAI API。
-         必要 env: `OPENAI_API_KEY`。
-         任意 env: `OPENAI_BASE_URL`,
-                  `THOR_LLM_ROUTER_MODEL` (default gpt-4o-mini),
-                  `THOR_LLM_ANALYTICS_MODEL` (default gpt-4o)。
-     - `THOR_LLM_PROVIDER=bedrock`: Amazon Bedrock (IAM role 前提)。
-         必要 env: `AWS_REGION` (または `THOR_AWS_REGION`)。
-         任意 env: `THOR_LLM_ROUTER_MODEL`, `THOR_LLM_ANALYTICS_MODEL`。
-
-  4. Cloudera Data Visualization (Deploy 後にプロジェクト内で有効化)
-     - Cloudera AI Workbench の Data メニューから CDV を「Enable」する
-       (プロジェクトごとに一度だけ実行が必要)。
-     - 有効化後に払い出された CDV endpoint URL を `THOR_CDV_BASE_URL` に設定。
-     - Trino connection ID を CDV 側で用意している場合は
-       `THOR_CDV_TRINO_CONNECTION_ID` に設定 (省略可)。
-     - CDV 未設定でも取り込み・サマリーは動く。ダッシュボード生成のみ
-       `CDV_NOT_CONFIGURED` エラーで停止し、UI にセットアップ手順が表示される。
-
-  上記いずれかが未設定のまま UI で該当機能を叩くと、API は HTTP 503 + JSON
-  ({error_code, instruction}) を返し、UI の SetupGuide カードが手順を表示する。
-  設定 → Application 再起動で解消する。
+  詳細な post-deploy 手順は README.md「Deploy 後の設定手順」セクションを参照。
 
 author: Cloudera
 date: "2026-09-19"
