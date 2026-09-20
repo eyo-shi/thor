@@ -5,6 +5,7 @@
  * - streaming: 送信中かどうか (Send ボタンの二重押し防止)
  */
 import { create } from "zustand";
+import type { SetupGuideError } from "../api/client";
 
 export interface ChatMessage {
   id: string;
@@ -30,6 +31,8 @@ interface ChatState {
   streaming: boolean;
   /** TreePane 等から prompt を予約する。PromptInput が読み取って textarea に反映。 */
   pendingPrompt: string | null;
+  /** Deploy 後の設定不足 (LLM / Trino / CDV) を UI に伝える 503 由来のエラー。 */
+  setupError: SetupGuideError | null;
   setPendingPrompt: (t: string | null) => void;
   appendUser: (text: string) => string;
   appendThor: (text: string, opts?: { artifactIds?: string[]; errorCode?: string }) => string;
@@ -38,6 +41,7 @@ interface ChatState {
   clearSteps: () => void;
   setStreaming: (v: boolean) => void;
   addArtifactToLastThor: (artifactId: string) => void;
+  setSetupError: (e: SetupGuideError | null) => void;
 }
 
 let _seq = 0;
@@ -51,7 +55,9 @@ export const useChatStore = create<ChatState>((set) => ({
   steps: [],
   streaming: false,
   pendingPrompt: null,
+  setupError: null,
   setPendingPrompt: (t) => set({ pendingPrompt: t }),
+  setSetupError: (e) => set({ setupError: e }),
   appendUser: (text) => {
     const id = mid();
     set((s) => ({

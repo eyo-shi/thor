@@ -1,11 +1,66 @@
 name: Thor
 description: |
-  Cloudera AI Agent Studio 上で動作する Databricks Genie 相当のマルチエージェント。
-  自然言語で S3 → Iceberg 取り込み / Data サマリー生成 / Cloudera Data Visualization
-  ダッシュボード作成を一気通貫に行う。3 ペイン Web UI (React + Vite) と FastAPI
-  バックエンドを Cloudera AI Workbench Application として配信し、Trino / CDV /
-  S3 は Knox JWT + IDBroker によるエンドユーザー権限で操作する (Genie 相当の RBAC)。
-  セマンティックレイヤは Apache Ossie の YAML を Git 管理する。
+  Cloudera AI Agent Studio 上で動くマルチエージェント。自然言語で S3 → Iceberg
+  取り込み / Data サマリー生成 / Cloudera Data Visualization ダッシュボード作成を
+  一気通貫に行う。3 ペイン Web UI (React + Vite) と FastAPI バックエンドを
+  Cloudera AI Workbench Application として配信し、Trino / CDV / S3 は Knox JWT +
+  IDBroker によるエンドユーザー権限で操作する。セマンティックレイヤは Apache
+  Ossie の YAML を Git 管理する。
+
+  ─────────────────────────────────────────────────────────────────
+  Deploy 後の設定手順 (Post-Deploy Configuration)
+  ─────────────────────────────────────────────────────────────────
+  AMP Deploy 時に必要な入力は極力ゼロにしてある。以下は Deploy 完了後に
+  **Project → Settings → Advanced → Environment Variables** で設定し、
+  同画面から Application を再起動して反映する運用となる。
+
+  1. Trino / CDW への接続
+     - Site Administration → Data Connections で CDW / Trino connection を
+       登録済みなら、`THOR_TRINO_CONNECTION_NAME` にその connection 名を
+       設定する (未設定でも Trino タイプの connection が 1 個なら自動採用)。
+     - Data Connections を使わない環境では以下 4 個の env を代わりに設定:
+       `THOR_TRINO_HOST`, `THOR_TRINO_PORT` (default 443),
+       `THOR_TRINO_CATALOG` (default iceberg), `THOR_TRINO_SCHEMA` (default demo)。
+
+  2. S3 への接続
+     - Site Administration → Data Connections で S3 connection を登録済みなら、
+       `THOR_S3_CONNECTION_NAME` を設定する (省略時は S3 タイプの最初の
+       connection を自動採用)。
+     - Data Connections を使わない環境では `THOR_AWS_REGION` (default us-east-1)。
+     - 認証情報は IDBroker STS 経由でユーザー単位に払い出されるため、AMP には
+       AWS access key / secret は一切保持しない。
+
+  3. LLM プロバイダ (以下いずれか 1 プロバイダを選択)
+     - `THOR_LLM_PROVIDER=cai` (default): Cloudera AI Inference。
+         必要 env: `CAI_INFERENCE_BASE_URL`, `CAI_INFERENCE_API_KEY`。
+         任意 env: `THOR_LLM_ROUTER_MODEL` (default llama-3-8b-instruct),
+                  `THOR_LLM_ANALYTICS_MODEL` (default llama-3-70b-instruct)。
+     - `THOR_LLM_PROVIDER=anthropic`: Anthropic API。
+         必要 env: `ANTHROPIC_API_KEY`。
+         任意 env: `ANTHROPIC_BASE_URL`,
+                  `THOR_LLM_ROUTER_MODEL` (default claude-3-5-haiku-latest),
+                  `THOR_LLM_ANALYTICS_MODEL` (default claude-3-5-sonnet-latest)。
+     - `THOR_LLM_PROVIDER=openai`: OpenAI API。
+         必要 env: `OPENAI_API_KEY`。
+         任意 env: `OPENAI_BASE_URL`,
+                  `THOR_LLM_ROUTER_MODEL` (default gpt-4o-mini),
+                  `THOR_LLM_ANALYTICS_MODEL` (default gpt-4o)。
+     - `THOR_LLM_PROVIDER=bedrock`: Amazon Bedrock (IAM role 前提)。
+         必要 env: `AWS_REGION` (または `THOR_AWS_REGION`)。
+         任意 env: `THOR_LLM_ROUTER_MODEL`, `THOR_LLM_ANALYTICS_MODEL`。
+
+  4. Cloudera Data Visualization (Deploy 後にプロジェクト内で有効化)
+     - Cloudera AI Workbench の Data メニューから CDV を「Enable」する
+       (プロジェクトごとに一度だけ実行が必要)。
+     - 有効化後に払い出された CDV endpoint URL を `THOR_CDV_BASE_URL` に設定。
+     - Trino connection ID を CDV 側で用意している場合は
+       `THOR_CDV_TRINO_CONNECTION_ID` に設定 (省略可)。
+     - CDV 未設定でも取り込み・サマリーは動く。ダッシュボード生成のみ
+       `CDV_NOT_CONFIGURED` エラーで停止し、UI にセットアップ手順が表示される。
+
+  上記いずれかが未設定のまま UI で該当機能を叩くと、API は HTTP 503 + JSON
+  ({error_code, instruction}) を返し、UI の SetupGuide カードが手順を表示する。
+  設定 → Application 再起動で解消する。
 
 author: Cloudera
 date: "2026-09-19"
@@ -22,72 +77,14 @@ runtimes:
 
 # ---------------------------------------------------------------------------
 # ユーザー入力 (AMP セットアップ画面のフォームに現れる)
+#
+# 方針: Deploy 時に必要な項目は極限まで削減する。Trino / S3 は Cloudera AI
+# Workbench の Site Administration → Data Connections が single source of
+# truth。LLM / CDV は「Deploy 後に Project → Settings → Advanced →
+# Environment Variables で設定 → Application 再起動」ワークフローに寄せる
+# (詳細は本ファイル冒頭の "Deploy 後の設定手順" を参照)。
 # ---------------------------------------------------------------------------
 environment_variables:
-  # --- Cloudera AI Inference (LLM) ---
-  CAI_INFERENCE_BASE_URL:
-    default: ""
-    description: >-
-      Cloudera AI Inference の base URL。例: https://ml-xxxx.cloudera.site/namespaces/serving-default/endpoints
-    required: true
-  CAI_INFERENCE_API_KEY:
-    default: ""
-    description: Cloudera AI Inference API key (Workbench の Secret に保存推奨)
-    required: true
-  THOR_LLM_ROUTER_MODEL:
-    default: "llama-3-8b-instruct"
-    description: Router / S3 Scout / Format Sniffer / Ossie Drafter 用の軽量モデル ID
-    required: true
-  THOR_LLM_ANALYTICS_MODEL:
-    default: "llama-3-70b-instruct"
-    description: Schema Drafter / Text2SQL / Analytics 用の精度重視モデル ID
-    required: true
-  THOR_LLM_EMBEDDING_MODEL:
-    default: "bge-m3"
-    description: Ossie RAG 検索の embedding モデル ID
-    required: false
-
-  # --- Trino / Cloudera Data Warehouse ---
-  TRINO_HOST:
-    default: ""
-    description: Trino エンドポイント (Knox 経由の hostname)。例 coord-cdw.example.com
-    required: true
-  TRINO_PORT:
-    default: "443"
-    description: Trino ポート
-    required: false
-  TRINO_CATALOG:
-    default: "iceberg"
-    description: 既定 catalog (通常は iceberg)
-    required: false
-  TRINO_SCHEMA:
-    default: "demo"
-    description: 既定 schema (デモ用スキーマ名)
-    required: false
-
-  # --- Cloudera Data Visualization ---
-  CDV_BASE_URL:
-    default: ""
-    description: CDV の base URL。ダッシュボード API と iframe 埋め込みの両方に使用
-    required: true
-
-  # --- S3 / IDBroker ---
-  IDBROKER_URL:
-    default: ""
-    description: IDBroker mapping エンドポイント。ユーザー個別 STS 資格情報の払い出し用
-    required: true
-  S3_DEMO_BUCKET:
-    default: ""
-    description: デモ用 S3 バケット名 (取り込みサンプルの置き場)
-    required: false
-
-  # --- Knox / Auth ---
-  KNOX_GATEWAY_URL:
-    default: ""
-    description: Knox Gateway URL。JWT の署名検証と Trino/CDV へのパススルーに使用
-    required: true
-
-  # --- Thor 本体 ---
   THOR_LOG_LEVEL:
     default: "INFO"
     description: structlog のログレベル (DEBUG / INFO / WARNING / ERROR)
@@ -95,8 +92,8 @@ environment_variables:
   THOR_DEMO_MODE:
     default: "off"
     description: >-
-      "warm" にすると Tool の重い呼び出しをウォーミング済みのスタブに差し替える (デモ保険)。
-      本番は "off"。
+      "warm" にすると Tool の重い呼び出しをウォーミング済みのスタブに差し替える
+      (デモ保険)。本番は "off"。
     required: false
 
 # ---------------------------------------------------------------------------
@@ -171,7 +168,8 @@ tasks:
       thor.api.main:app を uvicorn で起動する。ポートは Workbench が割り当てる
       CDSW_APP_PORT を使う。FastAPI が /api/* を提供しつつ / で SPA を静的配信
       する。Knox JWT は X-Forwarded-User / Cookie から抽出し、Trino / CDV /
-      IDBroker へパススルーする。
+      IDBroker へパススルーする。LLM / Trino / CDV の env は Deploy 後に
+      Project Settings で設定する運用 (本ファイル冒頭の設定手順参照)。
     kernel: python3
     cpu: 2
     memory: 4

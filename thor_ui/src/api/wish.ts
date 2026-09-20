@@ -12,10 +12,13 @@
  * FastAPI 側の契約は ``thor.api.sse`` を参照。
  */
 import type { WishEvent } from "../types";
+import { SetupGuideError, parseSetupGuidePayload } from "./client";
 
 export interface WishStreamHandlers {
   onEvent: (evt: WishEvent) => void;
   onError?: (err: unknown) => void;
+  /** LLM / Trino 未設定で 503 が返ったときの一段特別扱いフック。 */
+  onSetupGuide?: (e: SetupGuideError) => void;
   onClose?: () => void;
   signal?: AbortSignal;
 }
@@ -34,7 +37,7 @@ export async function streamWish(
   body: WishRequestBody,
   handlers: WishStreamHandlers,
 ): Promise<void> {
-  const { onEvent, onError, onClose, signal } = handlers;
+  const { onEvent, onError, onSetupGuide, onClose, signal } = handlers;
   let res: Response;
   try {
     res = await fetch("/api/wish", {
@@ -51,6 +54,28 @@ export async function streamWish(
     onError?.(e);
     onClose?.();
     return;
+  }
+  // Deploy 後の設定不足 (LLM 未設定など) は 503 + JSON で早期リターンされる。
+  // SSE は開かず、SetupGuide カードを ChatPane に表示させるフックを呼ぶ。
+  if (res.status === 503) {
+    let payload: unknown = null;
+    try {
+      payload = await res.json();
+    } catch {
+      /* ignore parse failure */
+    }
+    const guide = parseSetupGuidePayload(payload);
+    if (guide) {
+      const err = new SetupGuideError(
+        guide.errorCode,
+        guide.message,
+        guide.instruction,
+      );
+      if (onSetupGuide) onSetupGuide(err);
+      else onError?.(err);
+      onClose?.();
+      return;
+    }
   }
   if (!res.ok || !res.body) {
     onError?.({

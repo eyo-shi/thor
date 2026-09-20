@@ -3,12 +3,16 @@
 Knox 経由の Trino Gateway に、エンドユーザーの Knox JWT を Bearer として渡す。
 Trino 側は Knox が提示した JWT の ``sub`` クレームでユーザーを識別し、
 Ranger の ACL 判定に使う (= エンドユーザー権限)。
+
+接続先ホスト / port / SSL 検証は :mod:`thor.transport.config` の
+:func:`get_trino_config` から取得する。解決順は
+「Data Connection (Site Administration 由来) → env fallback」の 2 段。
 """
 from __future__ import annotations
 
-import os
 from typing import Any, Union
 
+from thor.transport.config import get_trino_config
 from thor.transport.errors import ErrorCode, err
 from thor.transport.user_context import UserContext
 
@@ -28,38 +32,37 @@ except ImportError:  # pragma: no cover
 
 def trino_connection_for_user(
     user_ctx: UserContext,
-    catalog: str = "iceberg",
+    catalog: Union[str, None] = None,
     schema: Union[str, None] = None,
 ) -> Union[Any, dict[str, Any]]:
-    """ユーザー権限で trino connection を返す。失敗時は err() dict。"""
+    """ユーザー権限で trino connection を返す。失敗時は err() dict。
+
+    :param catalog: 明示指定があれば config の catalog を上書きする
+    :param schema: 同上
+    """
     if trino is None:
         return err(ErrorCode.TRINO_QUERY_FAILED, "trino client is not installed")
     if not user_ctx.knox_jwt:
         return err(ErrorCode.AUTH_MISSING, "Knox JWT is required for Trino access")
-    host = os.environ.get("THOR_TRINO_HOST")
-    if not host:
+
+    cfg = get_trino_config()
+    if cfg is None:
         return err(
-            ErrorCode.TRINO_QUERY_FAILED,
-            "THOR_TRINO_HOST is not configured",
+            ErrorCode.TRINO_NOT_CONFIGURED,
+            "Trino connection is not configured. Register a CDW/Trino "
+            "Data Connection in Site Administration, or set "
+            "THOR_TRINO_CONNECTION_NAME / THOR_TRINO_HOST after deploy.",
         )
-    port = int(os.environ.get("THOR_TRINO_PORT", "443"))
-    scheme = os.environ.get("THOR_TRINO_SCHEME", "https")
-    verify_env = os.environ.get("THOR_TRINO_VERIFY_SSL", "true").lower()
-    verify: Union[bool, str] = True
-    if verify_env in ("false", "0", "no"):
-        verify = False
-    elif verify_env not in ("true", "1", "yes"):
-        # ファイルパス指定 (CA バンドル)
-        verify = verify_env
+
     conn = trino.dbapi.connect(
-        host=host,
-        port=port,
-        http_scheme=scheme,
+        host=cfg.host,
+        port=cfg.port,
+        http_scheme=cfg.scheme,
         user=user_ctx.user_name,
         auth=JWTAuthentication(user_ctx.knox_jwt),
-        catalog=catalog,
-        schema=schema,
-        verify=verify,
+        catalog=catalog or cfg.catalog,
+        schema=schema or cfg.schema,
+        verify=cfg.verify_ssl,
         http_headers={
             "X-Thor-Request-Id": user_ctx.request_id,
         },

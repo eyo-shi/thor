@@ -7,6 +7,7 @@
  *   (title / kind / ref はサーバから来た値を使う)
  */
 import { useCallback, useRef } from "react";
+import { SetupGuideError } from "../../api/client";
 import { streamWish } from "../../api/wish";
 import { useChatStore } from "../../stores/chatStore";
 import { useSessionStore } from "../../stores/sessionStore";
@@ -27,6 +28,7 @@ export function useWishStream(): UseWishStream {
   const clearSteps = useChatStore((s) => s.clearSteps);
   const setStreaming = useChatStore((s) => s.setStreaming);
   const addArtifactToLastThor = useChatStore((s) => s.addArtifactToLastThor);
+  const setSetupError = useChatStore((s) => s.setSetupError);
   const openTab = useTabStore((s) => s.openTab);
   const sessionId = useSessionStore((s) => s.sessionId);
 
@@ -42,6 +44,8 @@ export function useWishStream(): UseWishStream {
       if (!trimmed) return;
       appendUser(trimmed);
       clearSteps();
+      // 新しい送信で前回の SetupGuide は隠す (今回の応答で再度出れば新規表示される)
+      setSetupError(null);
       setStreaming(true);
       // Thor 側のバブルは token / artifact が来る前に空で用意
       appendThor("");
@@ -85,7 +89,23 @@ export function useWishStream(): UseWishStream {
                 break;
             }
           },
+          onSetupGuide: (e) => {
+            // LLM / Trino 未設定などの 503 は SetupGuide カードで表示する。
+            // 中身の空 Thor バブルは残ってしまうと違和感が強いので、
+            // このバブルにも短い案内を書いて紐付けを分かりやすくする。
+            setSetupError(e);
+            appendToLastThor(
+              `\n\n[${e.errorCode}] ${e.message}\n\n(設定手順は下のカードを参照)`,
+            );
+          },
           onError: (e) => {
+            if (e instanceof SetupGuideError) {
+              setSetupError(e);
+              appendToLastThor(
+                `\n\n[${e.errorCode}] ${e.message}\n\n(設定手順は下のカードを参照)`,
+              );
+              return;
+            }
             appendToLastThor(`\n\n[STREAM_ERROR] ${String(e)}`);
           },
           onClose: () => {
@@ -103,6 +123,7 @@ export function useWishStream(): UseWishStream {
       addArtifactToLastThor,
       clearSteps,
       setStreaming,
+      setSetupError,
       sessionId,
       openTab,
     ],

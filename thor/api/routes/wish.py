@@ -19,9 +19,10 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from typing import Annotated, AsyncIterator, Optional
+from typing import Annotated, Any, AsyncIterator, Optional
 
 from fastapi import APIRouter, Depends, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
@@ -34,6 +35,8 @@ from thor.api.sse import sse_artifact, sse_done, sse_error, sse_step, sse_token
 from thor.api.state import SessionTurn, get_store
 from thor.ingestion.crew import kickoff_ingestion
 from thor.router import DispatchPlan, RouterResult, kickoff_router
+from thor.transport.config import get_llm_config
+from thor.transport.llm_factory import build_llm_pair
 from thor.transport.logging import get_logger
 from thor.transport.user_context import (
     UserContext,
@@ -57,12 +60,39 @@ async def post_wish(
     body: WishRequest,
     request: Request,
     user_ctx: Annotated[UserContext, Depends(get_user_context)],
-) -> EventSourceResponse:
-    """SSE で Router + 子 Crew の実行を逐次配信する。"""
+) -> Any:
+    """SSE で Router + 子 Crew の実行を逐次配信する。
+
+    LLM が未設定なら SSE を開かず HTTP 503 + guided JSON を返す。UI
+    (:mod:`thor_ui.src.api.client`) は 503 レスポンスから
+    :class:`SetupGuideError` を投げ、ChatPane が SetupGuide カードを出す。
+    """
+    # LLM 未設定なら SSE を開かず 503 で早期リターン (UI が SetupGuide 表示)。
+    # env 変更 → Application 再起動で解消する運用。
+    if get_llm_config() is None:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error_code": "LLM_NOT_CONFIGURED",
+                "message": "LLM プロバイダが設定されていません。",
+                "instruction": (
+                    "Project → Settings → Advanced → Environment Variables に "
+                    "THOR_LLM_PROVIDER (cai / anthropic / openai / bedrock) と、"
+                    "選択したプロバイダに必要な API キー / エンドポイントを設定し、"
+                    "Application を再起動してください。"
+                ),
+            },
+        )
+
     store = get_store()
     sid = body.session_id or user_ctx.session_id
     session = store.get_or_create_session(sid, user_ctx.user_name)
     turn_id = f"turn_{uuid.uuid4().hex[:10]}"
+
+    # LLM は毎リクエストで env 経由に再解決する (env 変更 → Application 再起動で反映)。
+    # 未設定は上の 503 で弾いているのでここで None にはならない想定だが、
+    # crewai / litellm のインストール失敗等でファクトリが None を返す可能性は残る。
+    llm_light, llm_strong = build_llm_pair()
 
     async def stream() -> AsyncIterator[dict]:
         artifacts_created: list[str] = []
@@ -79,6 +109,7 @@ async def post_wish(
                 session_id=session.session_id,
                 entity_memory=dict(session.entity_memory),
                 target_schema_override=body.target_schema,
+                llm_light=llm_light,
             )
             yield sse_step(
                 "RouterCrew",
@@ -107,6 +138,8 @@ async def post_wish(
                     bucket=str(plan.inputs.get("bucket", "")),
                     key=str(plan.inputs.get("key", "")),
                     target_schema=str(plan.inputs.get("target_schema") or "demo"),
+                    llm_light=llm_light,
+                    llm_strong=llm_strong,
                     artifacts_created=artifacts_created,
                     response_md_parts=response_md_parts,
                     error_holder=error_holder,
@@ -120,6 +153,8 @@ async def post_wish(
                     turn_id=turn_id,
                     fq_table_name=str(plan.inputs.get("fq_table_name", "")),
                     question=str(plan.inputs.get("question") or body.prompt),
+                    llm_light=llm_light,
+                    llm_strong=llm_strong,
                     artifacts_created=artifacts_created,
                     response_md_parts=response_md_parts,
                     error_holder=error_holder,
@@ -133,6 +168,8 @@ async def post_wish(
                     turn_id=turn_id,
                     fq_table_name=str(plan.inputs.get("fq_table_name", "")),
                     question=str(plan.inputs.get("question") or body.prompt),
+                    llm_light=llm_light,
+                    llm_strong=llm_strong,
                     artifacts_created=artifacts_created,
                     response_md_parts=response_md_parts,
                     error_holder=error_holder,
@@ -196,6 +233,7 @@ def _run_router(
     session_id: str,
     entity_memory: dict,
     target_schema_override: Optional[str],
+    llm_light: Optional[Any] = None,
 ) -> RouterResult:
     """Router を実行し、target_schema の明示指定を plan に反映する。"""
     token = set_user_context(user_ctx)
@@ -205,8 +243,7 @@ def _run_router(
             prompt=prompt,
             session_id=session_id,
             entity_memory=entity_memory,
-            # llm_light は未接続 (LiteLLM の構築は API 起動時に別途注入)
-            llm_light=None,
+            llm_light=llm_light,
             mode="auto",
         )
     finally:
@@ -246,6 +283,8 @@ async def _handle_ingest(
     bucket: str,
     key: str,
     target_schema: str,
+    llm_light: Optional[Any],
+    llm_strong: Optional[Any],
     artifacts_created: list[str],
     response_md_parts: list[str],
     error_holder: list[Optional[str]],
@@ -282,6 +321,8 @@ async def _handle_ingest(
                 bucket=bucket,
                 key=key,
                 target_schema=target_schema,
+                llm_light=llm_light,
+                llm_strong=llm_strong,
             )
         finally:
             reset_user_context(token)
@@ -376,6 +417,8 @@ async def _handle_summary(
     turn_id: str,
     fq_table_name: str,
     question: str,
+    llm_light: Optional[Any],
+    llm_strong: Optional[Any],
     artifacts_created: list[str],
     response_md_parts: list[str],
     error_holder: list[Optional[str]],
@@ -412,6 +455,8 @@ async def _handle_summary(
                 user_ctx=scoped_ctx,
                 fq_table_name=fq_table_name,
                 question=question,
+                llm_light=llm_light,
+                llm_strong=llm_strong,
             )
         finally:
             reset_user_context(token)
@@ -480,6 +525,8 @@ async def _handle_dashboard(
     turn_id: str,
     fq_table_name: str,
     question: str,
+    llm_light: Optional[Any],
+    llm_strong: Optional[Any],
     artifacts_created: list[str],
     response_md_parts: list[str],
     error_holder: list[Optional[str]],
@@ -517,6 +564,8 @@ async def _handle_dashboard(
                 user_ctx=scoped_ctx,
                 fq_table_name=fq_table_name,
                 question=question,
+                llm_light=llm_light,
+                llm_strong=llm_strong,
             )
         finally:
             reset_user_context(token)

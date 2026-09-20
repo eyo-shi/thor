@@ -9,8 +9,11 @@ CDV は Cloudera が提供する BI/ダッシュボード SaaS/OnPrem 製品。R
 * すべての Tool は :class:`BaseThorTool` を継承し、Knox JWT を Bearer で送る
   (:class:`ThorHttpClient` が自動でヘッダに付ける)。
 * Knox JWT / 資格情報は LLM プロンプトにも Task inputs にも決して載らない。
-* CDV base URL は環境変数 ``THOR_CDV_BASE_URL`` から取得する。未設定なら
-  ``CDV_NOT_RUNNING`` エラーを返し、Dashboard Crew の guardrail が Crew を停止する。
+* CDV base URL は :func:`thor.transport.config.get_cdv_config` 経由で取得する。
+  CDV は AMP Deploy 後にプロジェクト内で有効化する運用のため、Deploy 時点では
+  未設定。未設定なら ``CDV_NOT_CONFIGURED`` エラーを返し、UI (SetupGuide) が
+  有効化手順を出す。起動確認 (:class:`CDVStartupCheckTool`) が実 HTTP 到達
+  失敗を返した場合は既存の ``CDV_NOT_RUNNING`` を維持する。
 
 **Tool 群**:
   * :class:`CDVStartupCheckTool` — CDV が起動しているかの疎通確認
@@ -20,11 +23,11 @@ CDV は Cloudera が提供する BI/ダッシュボード SaaS/OnPrem 製品。R
 """
 from __future__ import annotations
 
-import os
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
+from thor.transport.config import CDVConfig, get_cdv_config
 from thor.transport.errors import ErrorCode, err, ok
 from thor.transport.http import ThorHttpClient
 from thor.transport.logging import get_logger
@@ -54,19 +57,22 @@ class _CDVEndpoints:
     DASHBOARDS: str = "/arc/adminapi/v1/dashboards"
 
 
-def _cdv_base_url() -> Optional[str]:
-    """環境変数から CDV base URL を取得。無ければ None。"""
-    url = os.environ.get("THOR_CDV_BASE_URL")
-    return url.rstrip("/") if url else None
+def _require_cdv_config() -> tuple[Optional[CDVConfig], Optional[dict[str, Any]]]:
+    """CDV config を取得。未設定なら ``CDV_NOT_CONFIGURED`` err dict を返す。
 
-
-def _default_connection_id() -> Optional[str]:
-    """CDV 側の Trino 接続の ID (事前登録済み)。
-
-    デモ運用時、CDV には「Trino 用 Data Connection」を事前に 1 つ作っておく
-    ことを前提とする (毎回 Ingestion のたびに接続を作るのは非現実的)。
+    Tool の ``run()`` 冒頭で ``cfg, error = _require_cdv_config()`` として使う。
+    ``error`` が None でなければそのまま return する。
     """
-    return os.environ.get("THOR_CDV_TRINO_CONNECTION_ID")
+    cfg = get_cdv_config()
+    if cfg is None:
+        return None, err(
+            ErrorCode.CDV_NOT_CONFIGURED,
+            "Cloudera Data Visualization はまだ設定されていません。"
+            "Cloudera AI Workbench の Data メニューから CDV を有効化した後、"
+            "Project → Settings → Advanced → Environment Variables に "
+            "THOR_CDV_BASE_URL を追加して Application を再起動してください。",
+        )
+    return cfg, None
 
 
 # ------------------------------------------------------------------ #
@@ -81,8 +87,8 @@ class CDVStartupCheckArgs(BaseModel):
 class CDVStartupCheckTool(BaseThorTool):
     """CDV が起動しているか確認する。
 
-    * 環境変数 ``THOR_CDV_BASE_URL`` が未設定なら ``CDV_NOT_RUNNING`` で即返却
-      (Crew の guardrail が後段を停止する)。
+    * :func:`get_cdv_config` が None (``THOR_CDV_BASE_URL`` 未設定) なら
+      ``CDV_NOT_CONFIGURED`` で即返却 (UI が SetupGuide カードを出す)。
     * URL は設定されているが GET /status が 5xx / timeout なら ``CDV_NOT_RUNNING``。
     * 401/403 は起動している証拠なので ``running=true`` として返す
       (権限は個別 API 側で判定させる)。
@@ -102,14 +108,10 @@ class CDVStartupCheckTool(BaseThorTool):
         user_ctx: Optional[UserContext],
         **_: Any,
     ) -> dict[str, Any]:
-        base = _cdv_base_url()
-        if not base:
-            return err(
-                ErrorCode.CDV_NOT_RUNNING,
-                "CDV base URL is not configured (set THOR_CDV_BASE_URL). "
-                "Ask the user to start Cloudera Data Visualization from the "
-                "Workbench Data menu once.",
-            )
+        cfg, cfg_err = _require_cdv_config()
+        if cfg_err is not None:
+            return cfg_err
+        base = cfg.base_url
 
         with ThorHttpClient(base_url=base, timeout=5.0, max_attempts=1) as http:
             resp = http.get(_CDVEndpoints.STATUS, expect_json=True)
@@ -184,11 +186,12 @@ class CDVDatasetTool(BaseThorTool):
         reuse_if_exists: bool = True,
         **_: Any,
     ) -> dict[str, Any]:
-        base = _cdv_base_url()
-        if not base:
-            return err(ErrorCode.CDV_NOT_RUNNING, "CDV base URL not configured.")
+        cfg, cfg_err = _require_cdv_config()
+        if cfg_err is not None:
+            return cfg_err
+        base = cfg.base_url
 
-        conn_id = connection_id or _default_connection_id()
+        conn_id = connection_id or cfg.trino_connection_id
         if not conn_id:
             return err(
                 ErrorCode.CDV_API_FAILED,
@@ -308,9 +311,10 @@ class CDVVisualTool(BaseThorTool):
         limit: int = 1000,
         **_: Any,
     ) -> dict[str, Any]:
-        base = _cdv_base_url()
-        if not base:
-            return err(ErrorCode.CDV_NOT_RUNNING, "CDV base URL not configured.")
+        cfg, cfg_err = _require_cdv_config()
+        if cfg_err is not None:
+            return cfg_err
+        base = cfg.base_url
 
         if viz_type not in {"line", "bar", "pie", "kpi", "table"}:
             return err(
@@ -404,9 +408,10 @@ class CDVDashboardTool(BaseThorTool):
         description: Optional[str] = None,
         **_: Any,
     ) -> dict[str, Any]:
-        base = _cdv_base_url()
-        if not base:
-            return err(ErrorCode.CDV_NOT_RUNNING, "CDV base URL not configured.")
+        cfg, cfg_err = _require_cdv_config()
+        if cfg_err is not None:
+            return cfg_err
+        base = cfg.base_url
 
         if not visual_ids:
             return err(

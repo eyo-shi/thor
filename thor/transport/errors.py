@@ -41,6 +41,8 @@ class ErrorCode:
     TRINO_DDL_FAILED = "TRINO_DDL_FAILED"
     TRINO_TABLE_NOT_FOUND = "TRINO_TABLE_NOT_FOUND"
     TRINO_EXPLAIN_FAILED = "TRINO_EXPLAIN_FAILED"
+    #: Trino Data Connection も env も設定されていない。API では 503 に変換。
+    TRINO_NOT_CONFIGURED = "TRINO_NOT_CONFIGURED"
 
     # Permission
     PERM_CREATE_DENIED = "PERM_CREATE_DENIED"
@@ -52,6 +54,8 @@ class ErrorCode:
     CDV_NOT_RUNNING = "CDV_NOT_RUNNING"
     CDV_API_FAILED = "CDV_API_FAILED"
     CDV_DATASET_CONFLICT = "CDV_DATASET_CONFLICT"
+    #: CDV が AMP Deploy 後にまだ有効化 / 設定されていない。UI に SetupGuide を出させる。
+    CDV_NOT_CONFIGURED = "CDV_NOT_CONFIGURED"
 
     # Ossie
     OSSIE_YAML_INVALID = "OSSIE_YAML_INVALID"
@@ -62,6 +66,11 @@ class ErrorCode:
     HTTP_TIMEOUT = "HTTP_TIMEOUT"
     HTTP_UNAVAILABLE = "HTTP_UNAVAILABLE"
     AUTH_MISSING = "AUTH_MISSING"
+
+    # LLM
+    #: LLM provider が未設定 or 必要な env が欠けている。API では 503 に変換。
+    LLM_NOT_CONFIGURED = "LLM_NOT_CONFIGURED"
+    LLM_UNAVAILABLE = "LLM_UNAVAILABLE"
 
 
 @dataclass

@@ -16,10 +16,34 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from thor.api.auth import require_user_context
+from thor.transport.config import get_trino_config
 from thor.transport.user_context import UserContext
 from thor.tools._trino_client import map_trino_error, trino_connection_for_user
 
 router = APIRouter(prefix="/api/catalog", tags=["catalog"])
+
+
+def _require_trino_or_503() -> None:
+    """Trino 未設定なら 503 + guided error を投げる (UI が SetupGuide 表示)。
+
+    Data Connection (``THOR_TRINO_CONNECTION_NAME``) と env fallback の
+    どちらでも解決できないケース。呼び出し元は catalog 各エンドポイント。
+    """
+    if get_trino_config() is None:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error_code": "TRINO_NOT_CONFIGURED",
+                "message": "Trino / CDW への接続情報が設定されていません。",
+                "instruction": (
+                    "Cloudera AI Workbench の Site Administration → Data "
+                    "Connections で CDW / Trino connection を登録し、Project "
+                    "→ Settings → Advanced → Environment Variables に "
+                    "THOR_TRINO_CONNECTION_NAME を設定して Application を"
+                    "再起動してください。"
+                ),
+            },
+        )
 
 
 def _run_query(
@@ -44,6 +68,7 @@ def list_schemas(
     user_ctx: Annotated[UserContext, Depends(require_user_context)],
     catalog: Annotated[str, Query(min_length=1, max_length=128)] = "iceberg",
 ) -> dict[str, Any]:
+    _require_trino_or_503()
     sql = (
         f"SELECT schema_name FROM {catalog}.information_schema.schemata "
         "ORDER BY schema_name"
@@ -61,6 +86,7 @@ def list_tables(
     schema: Annotated[str, Query(min_length=1, max_length=128)],
     catalog: Annotated[str, Query(min_length=1, max_length=128)] = "iceberg",
 ) -> dict[str, Any]:
+    _require_trino_or_503()
     sql = (
         f"SELECT table_name, table_type "
         f"FROM {catalog}.information_schema.tables "
@@ -85,6 +111,7 @@ def list_columns(
     fq: Annotated[str, Query(min_length=3, max_length=256)],
 ) -> dict[str, Any]:
     """``fq`` は ``catalog.schema.table`` 形式。"""
+    _require_trino_or_503()
     parts = fq.split(".")
     if len(parts) != 3:
         raise HTTPException(

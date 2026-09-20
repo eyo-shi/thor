@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from thor.api.auth import require_user_context
+from thor.transport.config import get_trino_config
 from thor.transport.user_context import UserContext
 from thor.tools._trino_client import map_trino_error, trino_connection_for_user
 
@@ -43,6 +44,22 @@ def run_query(
     body: QueryRequest,
     user_ctx: Annotated[UserContext, Depends(require_user_context)],
 ) -> QueryResponse:
+    # Trino 未設定なら 503 + guided error (UI が SetupGuide 表示)
+    if get_trino_config() is None:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error_code": "TRINO_NOT_CONFIGURED",
+                "message": "Trino / CDW への接続情報が設定されていません。",
+                "instruction": (
+                    "Cloudera AI Workbench の Site Administration → Data "
+                    "Connections で CDW / Trino connection を登録し、Project "
+                    "→ Settings → Advanced → Environment Variables に "
+                    "THOR_TRINO_CONNECTION_NAME を設定して Application を"
+                    "再起動してください。"
+                ),
+            },
+        )
     if _MUTATION_RE.match(body.sql):
         raise HTTPException(
             status_code=400,

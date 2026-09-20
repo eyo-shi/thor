@@ -1,25 +1,25 @@
 """LLM 呼び出しの薄いラッパ (LiteLLM 経由)。
 
-Cloudera AI Inference は OpenAI 互換 API を提供するため、``litellm.completion``
-に ``api_base`` と ``api_key`` を渡すだけで叩ける。
+provider (cai / anthropic / openai / bedrock) は :func:`get_llm_config` で
+解決する。ここは低レイヤなので、config が None なら黙って ``None`` を返す
+(Tool 側でその変換をする責務)。
 
 **方針**:
 
-* LiteLLM が未インストール、または環境変数が不足していれば ``None`` を返す。
-  呼び出し元 (Tool / Task) は「LLM が使えない環境なので heuristic を採用する」
-  fallback を取る。
-* 例外は投げず、::class:`ThorErrorResult` 相当の error dict は返さない
-  (Tool 側でその変換をする責務のため、ここは低レイヤ)。
-* 常に JSON 応答を期待する ``try_json_completion`` のみ提供する
-  (自由形式の LLM 応答は Crew.ai の Task 側で扱うので、ここでは不要)。
+* LiteLLM が未インストール、または :func:`get_llm_config` が None (env 不足)
+  なら ``None`` を返す。呼び出し元 (Tool / Task) は「LLM が使えない環境なので
+  heuristic を採用する」fallback を取る。
+* 例外は投げず、::class:`ThorErrorResult` 相当の error dict は返さない。
+* 常に JSON 応答を期待する ``try_json_completion`` のみ提供する。
 """
 from __future__ import annotations
 
 import json
-import os
 import re
 from typing import Any, Optional
 
+from thor.transport.config import get_llm_config
+from thor.transport.llm_factory import _apply_prefix
 from thor.transport.logging import get_logger
 
 _logger = get_logger(__name__)
@@ -41,11 +41,11 @@ def try_json_completion(
     LiteLLM の :func:`completion` を使う。以下のいずれかの理由で **None** を返す:
 
     * ``litellm`` が未インストール
-    * 必須環境変数 ``CAI_INFERENCE_BASE_URL`` / ``CAI_INFERENCE_API_KEY`` が未設定
+    * :func:`get_llm_config` が ``None`` (provider 未設定 or env 不足)
     * LLM 応答が JSON にパースできない
     * ネットワーク例外 / タイムアウト
 
-    :param model: 明示的なモデル ID (省略時は ``THOR_LLM_ROUTER_MODEL`` を使う)
+    :param model: 明示的なモデル ID (省略時は provider の light モデル)
     """
     try:
         import litellm  # type: ignore
@@ -53,39 +53,45 @@ def try_json_completion(
         _logger.debug("llm.litellm_not_installed")
         return None
 
-    base_url = os.environ.get("CAI_INFERENCE_BASE_URL", "").strip()
-    api_key = os.environ.get("CAI_INFERENCE_API_KEY", "").strip()
-    if not base_url or not api_key:
-        _logger.debug("llm.env_missing", base_url_present=bool(base_url))
+    cfg = get_llm_config()
+    if cfg is None:
+        _logger.debug("llm.config_missing")
         return None
 
-    resolved_model = model or os.environ.get(
-        "THOR_LLM_ROUTER_MODEL", "llama-3-8b-instruct"
-    )
+    resolved_model = model or cfg.model_light
+    prefixed = _apply_prefix(cfg.provider, resolved_model)
+
+    kwargs: dict[str, Any] = {
+        "model": prefixed,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are a strict JSON responder. Reply with ONLY a JSON "
+                    "object (no prose, no code fences)."
+                ),
+            },
+            {"role": "user", "content": prompt},
+        ],
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "timeout": timeout,
+    }
+    if cfg.api_base:
+        kwargs["api_base"] = cfg.api_base
+    if cfg.api_key:
+        kwargs["api_key"] = cfg.api_key
+    if cfg.provider == "bedrock" and cfg.aws_region:
+        kwargs["aws_region_name"] = cfg.aws_region
 
     try:
-        resp = litellm.completion(  # type: ignore[attr-defined]
-            model=f"openai/{resolved_model}",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a strict JSON responder. Reply with ONLY a JSON "
-                        "object (no prose, no code fences)."
-                    ),
-                },
-                {"role": "user", "content": prompt},
-            ],
-            api_base=base_url,
-            api_key=api_key,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            timeout=timeout,
-        )
+        resp = litellm.completion(**kwargs)  # type: ignore[attr-defined]
         # OpenAI 互換の choices[0].message.content
         content = resp["choices"][0]["message"]["content"]  # type: ignore[index]
     except Exception as e:  # noqa: BLE001
-        _logger.warning("llm.completion_failed", error=str(e))
+        _logger.warning(
+            "llm.completion_failed", provider=cfg.provider, error=str(e)
+        )
         return None
 
     return _parse_json_lenient(content)
