@@ -115,14 +115,15 @@ tasks:
   # 5. Thor API を Workbench Application として起動 (Knox パススルーで公開)
   - type: start_application
     name: Thor API + UI
+    entity_label: thor-api
     subdomain: thor
     static_subdomain: true
     script: amp/05_start_application.py
     short_summary: FastAPI + SPA を Workbench Application として起動
     long_summary: >-
-      amp/05_start_application.py が FastAPI ``app`` を公開する。CDSW_APP_PORT が
-      既に listen 中なら Workbench 配信とみなし keep-alive、空いていれば uvicorn
-      を起動する。/api/* と SPA (/) を配信。Knox JWT は X-Forwarded-User /
+      amp/05_start_application.py が CDSW_APP_PORT を待って uvicorn で FastAPI
+      ``app`` を localhost bind する。/api/* と SPA (/) を配信。Knox JWT は
+      X-Forwarded-User /
       Cookie から抽出し、Trino / CDV / IDBroker へパススルーする。LLM / Trino /
       CDV の env は Deploy 後に Project Settings で設定する運用 (本ファイル冒頭
       の設定手順参照)。

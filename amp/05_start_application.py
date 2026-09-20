@@ -1,17 +1,15 @@
 """Workbench Application 起動エントリ (AMP Step 5)。
 
-``start_application`` は Jupyter kernel 内で本スクリプトを exec する。
+CML は ``CDSW_APP_PORT`` で listen するプロセスを Application 本体とみなす。
+BrowserSvcs が外部 URL を localhost:CDSW_APP_PORT へ proxy する。
 
-* ``app`` を import した時点で Workbench が CDSW_APP_PORT を bind する場合がある
-  → uvicorn 二重起動を避け、**プロセスを終了させず keep-alive** する
-* ポートが空いていれば自前で uvicorn を起動 (kernel 内は別スレッド)
-* Application の Status が ``Starting`` のままになるのを防ぐため、
-  いずれの経路でもメインプロセスは blocking する
+* ``CDSW_APP_PORT`` が注入されるまで短時間待つ (port 0 / Duplicate port 0 回避)
+* Jupyter kernel 内では :func:`thor.api.main.serve` が uvicorn を別スレッド起動
+* ``app`` は import 時点で公開 (Workbench の FastAPI 検出用)
 """
 from __future__ import annotations
 
 import os
-import socket
 import time
 
 
@@ -26,46 +24,31 @@ def _normalize_deploy_env() -> None:
             os.environ[key] = default
 
 
-def _resolve_app_port() -> int:
-    port_env = os.environ.get("CDSW_APP_PORT") or os.environ.get(
-        "THOR_API_PORT", "8080"
+def _wait_for_app_port(timeout_sec: float = 60.0) -> int:
+    """``CDSW_APP_PORT`` が正の整数になるまで待つ。"""
+    deadline = time.monotonic() + timeout_sec
+    while time.monotonic() < deadline:
+        raw = (os.environ.get("CDSW_APP_PORT") or "").strip()
+        if raw:
+            try:
+                port = int(raw)
+            except ValueError:
+                port = 0
+            if port > 0:
+                print(f"[amp:05] CDSW_APP_PORT={port}", flush=True)
+                return port
+        time.sleep(0.5)
+    raise RuntimeError(
+        "CDSW_APP_PORT was not assigned within "
+        f"{timeout_sec:.0f}s (BrowserSvcs may log Duplicate port 0)"
     )
-    try:
-        return int(port_env)
-    except ValueError:
-        return 8080
-
-
-def _port_is_listening(port: int, host: str = "127.0.0.1") -> bool:
-    """APP ポートが既に listen 中か (Workbench 側配信の検出用)。"""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.settimeout(0.5)
-        return sock.connect_ex((host, port)) == 0
-
-
-def _keep_alive() -> None:
-    """Workbench Application プロセスを Running 状態に保つ。"""
-    print(
-        "[amp:05] keeping application process alive (Workbench serves the port)",
-        flush=True,
-    )
-    while True:
-        time.sleep(3600)
 
 
 _normalize_deploy_env()
+_wait_for_app_port()
 
 from thor.api.main import app, serve  # noqa: E402
 
 if __name__ == "__main__":
-    port = _resolve_app_port()
-    if _port_is_listening(port):
-        print(
-            f"[amp:05] CDSW_APP_PORT={port} already listening "
-            "— skip uvicorn, keep process alive",
-            flush=True,
-        )
-        _keep_alive()
-    else:
-        print(f"[amp:05] starting uvicorn on port {port}", flush=True)
-        serve()
+    print("[amp:05] starting uvicorn on CDSW_APP_PORT", flush=True)
+    serve()

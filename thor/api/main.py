@@ -205,22 +205,45 @@ def _mount_placeholder(app: FastAPI, static_dir: Path, logger: Any) -> None:
 app = create_app()
 
 
+def _uvicorn_host() -> str:
+    """CML Application では localhost bind が推奨 (BrowserSvcs が proxy する)。"""
+    explicit = os.environ.get("THOR_API_HOST")
+    if explicit and str(explicit).strip():
+        return str(explicit).strip()
+    if os.environ.get("CDSW_APP_PORT") or os.environ.get("TASK_TYPE") == "START_APPLICATION":
+        return "127.0.0.1"
+    return "0.0.0.0"
+
+
+def _uvicorn_port() -> int:
+    """Workbench Application では CDSW_APP_PORT 必須 (0 / 未設定は使わない)。"""
+    if os.environ.get("TASK_TYPE") == "START_APPLICATION" or os.environ.get(
+        "CDSW_APP_PORT"
+    ):
+        raw = os.environ.get("CDSW_APP_PORT", "").strip()
+        if not raw:
+            raise RuntimeError(
+                "CDSW_APP_PORT is not set. Workbench Application cannot start."
+            )
+        port = int(raw)
+        if port <= 0:
+            raise RuntimeError(f"CDSW_APP_PORT must be > 0, got {port!r}")
+        return port
+    port_env = os.environ.get("THOR_API_PORT", "8080")
+    try:
+        return int(port_env)
+    except ValueError:
+        return 8080
+
+
 def _uvicorn_config() -> Any:
     """uvicorn Config を組み立てる (テスト / serve 共通)。"""
     import uvicorn
 
-    port_env = os.environ.get("CDSW_APP_PORT") or os.environ.get(
-        "THOR_API_PORT", "8080"
-    )
-    try:
-        port = int(port_env)
-    except ValueError:
-        port = 8080
-
     return uvicorn.Config(
         app,
-        host=_env_non_empty("THOR_API_HOST", "0.0.0.0"),
-        port=port,
+        host=_uvicorn_host(),
+        port=_uvicorn_port(),
         log_level=_uvicorn_log_level(),
         proxy_headers=True,
         forwarded_allow_ips="*",
