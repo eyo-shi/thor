@@ -45,25 +45,25 @@ export function TreePane() {
         </button>
       </div>
 
-      {mode === "tables" && (
-        <div className="explorer-search">
-          <input
-            type="search"
-            placeholder="Search SQL tables…"
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-          />
-          <span className="explorer-search__icon" aria-hidden="true">
-            ⌕
-          </span>
-        </div>
-      )}
+      <div className="explorer-search">
+        <input
+          type="search"
+          placeholder={
+            mode === "tables" ? "Search SQL tables…" : "Search storage…"
+          }
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+        />
+        <span className="explorer-search__icon" aria-hidden="true">
+          ⌕
+        </span>
+      </div>
 
       <div className="tree-body explorer-body">
         {mode === "tables" ? (
           <ExploreView filter={filter} />
         ) : (
-          <StorageView />
+          <StorageView filter={filter} />
         )}
       </div>
     </div>

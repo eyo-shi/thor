@@ -52,21 +52,51 @@ export function PromptInput({ wish }: Props) {
           <button
             type="button"
             className="chat-composer__btn chat-composer__btn--cancel"
+            aria-label="停止"
+            title="停止"
             onClick={() => wish.cancel()}
           >
-            停止
+            <IconStop />
           </button>
         ) : (
           <button
             type="button"
             className="chat-composer__btn chat-composer__btn--send"
+            aria-label="送信"
+            title="送信"
             onClick={() => void submit()}
             disabled={!text.trim()}
           >
-            送信
+            <IconSend />
           </button>
         )}
       </div>
+      <p className="chat-composer__disclaimer">
+        AI-generated results may be incorrect. Please exercise caution.
+      </p>
     </div>
+  );
+}
+
+function IconSend() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className="chat-composer__icon">
+      <path
+        d="M5 12h12M13 6l6 6-6 6"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function IconStop() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className="chat-composer__icon">
+      <rect x="7" y="7" width="10" height="10" rx="1" fill="currentColor" />
+    </svg>
   );
 }

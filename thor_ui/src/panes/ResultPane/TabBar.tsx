@@ -19,11 +19,7 @@ export function TabBar() {
   const closeTab = useTabStore((s) => s.closeTab);
 
   if (tabs.length === 0) {
-    return (
-      <div className="tab-bar tab-bar--empty">
-        <span className="placeholder">no tabs</span>
-      </div>
-    );
+    return null;
   }
   return (
     <div className="tab-bar">

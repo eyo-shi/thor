@@ -1,19 +1,18 @@
 /**
- * グローバルヘッダー: Cloudera ロゴ + Thor プロダクト名。
- * 全画面共通のトップバー（Cloudera ロゴ + Thor）。
+ * グローバルヘッダー: Cloudera ロゴ。
  */
 export function AppHeader() {
   return (
     <header className="app-header">
       <div className="app-header__brand">
         <img
-          src="/cloudera-logo.jpg"
+          src="/cloudera-logo.png"
+          srcSet="/cloudera-logo.png 1x, /cloudera-logo@2x.png 2x"
           alt="Cloudera"
           className="app-header__logo"
+          width={231}
           height={28}
         />
-        <span className="app-header__divider" aria-hidden="true" />
-        <span className="app-header__product">Thor</span>
       </div>
     </header>
   );

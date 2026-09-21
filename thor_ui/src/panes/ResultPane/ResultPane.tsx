@@ -14,9 +14,10 @@ export function ResultPane() {
   const tabs = useTabStore((s) => s.tabs);
   const activeId = useTabStore((s) => s.activeId);
   const active = tabs.find((t) => t.id === activeId) ?? null;
+  const isEmpty = tabs.length === 0;
 
   return (
-    <div className="result-pane">
+    <div className={"result-pane" + (isEmpty ? " result-pane--empty" : "")}>
       <TabBar />
       <div className="pane-body result-body">
         {!active && (
@@ -24,7 +25,7 @@ export function ResultPane() {
             <h2>ようこそ Thor へ</h2>
             <p>
               左の Explorer からテーブルや S3 オブジェクトを選ぶか、右の
-              Assistant に自然言語で指示してください。
+              Thor に自然言語で指示してください。
             </p>
             <ul className="welcome__hints">
               <li>「s3://demo-bucket/... を取り込んで」</li>

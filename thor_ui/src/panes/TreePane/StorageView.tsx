@@ -13,7 +13,11 @@ function parseBuckets(): string[] {
   return list.length ? list : ["demo-bucket"];
 }
 
-export function StorageView() {
+interface StorageViewProps {
+  filter: string;
+}
+
+export function StorageView({ filter }: StorageViewProps) {
   const buckets = useMemo(parseBuckets, []);
 
   return (
@@ -24,7 +28,7 @@ export function StorageView() {
       </div>
       <div className="explorer-storage-body">
         {buckets.map((b) => (
-          <S3Tree key={b} bucket={b} filter="" />
+          <S3Tree key={b} bucket={b} filter={filter} />
         ))}
       </div>
     </div>
