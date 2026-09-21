@@ -23,7 +23,11 @@ export function ChatPane() {
     <div className="chat-pane">
       <div className="pane-header pane-header--chat">
         <div className="pane-header__brand">
-          <IconThorLightning />
+          <img
+            src="/thor_logo.svg"
+            alt=""
+            className="pane-header__thor-icon"
+          />
           <span className="pane-header__title">Thor</span>
         </div>
         <span className="pane-header__hint">自然言語でデータ操作を依頼</span>
@@ -40,20 +44,5 @@ export function ChatPane() {
       </div>
       <PromptInput wish={wish} />
     </div>
-  );
-}
-
-function IconThorLightning() {
-  return (
-    <svg
-      className="pane-header__thor-icon"
-      viewBox="0 0 24 24"
-      aria-hidden="true"
-    >
-      <path
-        d="M13 2L4 14h7l-1 8 9-12h-7l1-8z"
-        fill="currentColor"
-      />
-    </svg>
   );
 }
